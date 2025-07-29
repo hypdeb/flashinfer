@@ -1,5 +1,27 @@
-cmake_minimum_required(VERSION 3.23.1)
+cmake_minimum_required(VERSION 3.28.6)
 project(flashinfer CUDA CXX)
+
+# Detect highest available compute capability
+set(OUTPUTFILE ${PROJECT_BINARY_DIR}/detect_cuda_arch)
+set(CUDAFILE ${CMAKE_SOURCE_DIR}/cmake/utils/detect_cuda_arch.cu)
+execute_process(COMMAND ${CMAKE_CUDA_COMPILER} -lcuda ${CUDAFILE} -o
+                        ${OUTPUTFILE})
+message(VERBOSE "Detecting native CUDA compute capability")
+execute_process(
+  COMMAND ${OUTPUTFILE}
+  RESULT_VARIABLE CUDA_RETURN_CODE
+  OUTPUT_VARIABLE CUDA_ARCH_OUTPUT)
+if(NOT ${CUDA_RETURN_CODE} EQUAL 0)
+  message(WARNING "Detecting native CUDA compute capability - fail")
+  message(
+    WARNING
+      "CUDA compute capability detection failed, compiling for all optimized architectures"
+  )
+  unset(CMAKE_CUDA_ARCHITECTURES_RAW)
+else()
+  message(STATUS "Detecting native CUDA compute capability - done")
+  set(CMAKE_CUDA_ARCHITECTURES_RAW "${CUDA_ARCH_OUTPUT}")
+endif()
 
 option(ENABLE_TESTING "Enable testing" ON)
 
@@ -96,6 +118,7 @@ flashinfer_option(FLASHINFER_GEN_USE_FP16_QK_REDUCTIONS
                   "QK reductions to enable" OFF)
 flashinfer_option(FLASHINFER_GEN_MASK_MODES "Mask modes to enable" 0 1 2)
 
+MESSAGE(STATUS "FLASHINFER_CUDA_ARCHITECTURES: ${FLASHINFER_CUDA_ARCHITECTURES}")
 if(DEFINED FLASHINFER_CUDA_ARCHITECTURES)
   message(
     STATUS "CMAKE_CUDA_ARCHITECTURES set to ${FLASHINFER_CUDA_ARCHITECTURES}.")

@@ -37,10 +37,6 @@
                     "value": "ON",
                     "type": "STRING"
                 },
-                "FLASHINFER_CUDA_ARCHITECTURES": {
-                    "value": "90a",
-                    "type": "STRING"
-                },
                 "FLASHINFER_GEN_HEAD_DIMS": {
                     "value": "64;128;256;512",
                     "type": "STRING"

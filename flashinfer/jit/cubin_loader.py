@@ -17,6 +17,7 @@ limitations under the License.
 import ctypes
 import hashlib
 import os
+from pathlib import Path
 import shutil
 import time
 
@@ -164,11 +165,12 @@ def convert_to_ctypes_char_p(data: bytes):
 dll_cubin_handlers = {}
 
 
-def setup_cubin_loader(dll_path: str):
+def setup_cubin_loader(dll_path: str | Path):
     if dll_path in dll_cubin_handlers:
         return
 
-    _LIB = ctypes.CDLL(dll_path)
+    string_path = str(dll_path)
+    _LIB = ctypes.CDLL(string_path)
 
     # Define the correct callback type
     CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_char_p)
@@ -182,7 +184,7 @@ def setup_cubin_loader(dll_path: str):
 
     # Create the callback and keep a reference to prevent GC
     cb = CALLBACK_TYPE(get_cubin_callback)
-    dll_cubin_handlers[dll_path] = cb
+    dll_cubin_handlers[string_path] = cb
 
     _LIB.FlashInferSetCubinCallback(cb)
 

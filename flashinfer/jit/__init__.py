@@ -62,7 +62,7 @@ from .attention import get_pod_uri as get_pod_uri
 from .attention import get_single_decode_uri as get_single_decode_uri
 from .attention import get_single_prefill_uri as get_single_prefill_uri
 from .attention import trtllm_gen_fmha_module as trtllm_gen_fmha_module
-from .core import JitSpec as JitSpec
+from .core import JitSpec as JitSpec, build_and_load
 from .core import build_jit_specs as build_jit_specs
 from .core import clear_cache_dir as clear_cache_dir
 from .core import gen_jit_spec as gen_jit_spec
@@ -73,9 +73,9 @@ from .cubin_loader import setup_cubin_loader, setup_metainfo_loader
 
 @functools.cache
 def get_cudnn_fmha_gen_module():
-    mod = cudnn_fmha_gen_module()
-    op = mod.build_and_load()
-    setup_cubin_loader(mod.get_library_path())
+    spec = cudnn_fmha_gen_module()
+    op = build_and_load(spec)
+    setup_cubin_loader(spec.get_library_path())
     return op
 
 

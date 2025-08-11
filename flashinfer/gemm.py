@@ -24,6 +24,8 @@ from typing import List, Literal, Optional, Tuple
 import jinja2
 import torch
 
+from flashinfer.jit.core import build_and_load
+
 from .artifacts import ArtifactPath, MetaInfoHash
 from .autotuner import (
     AutoTuner,
@@ -296,9 +298,8 @@ def gen_gemm_sm100_module() -> JitSpec:
 
 @functools.cache
 def get_gemm_sm100_module():
-    module = gen_gemm_sm100_module().build_and_load()
-
-    return module
+    spec = gen_gemm_sm100_module()
+    return build_and_load(spec)
 
 
 def trtllm_gemm_gen_module() -> JitSpec:
@@ -332,14 +333,15 @@ def trtllm_gemm_gen_module() -> JitSpec:
 @functools.cache
 def get_trtllm_gemm_module():
     mod = trtllm_gemm_gen_module()
-    op = mod.build_and_load()
+    op = build_and_load(mod)
     setup_cubin_loader(mod.get_library_path())
     return op
 
 
 @functools.cache
 def get_gemm_sm100_module_cutlass_fp4():
-    module = gen_gemm_sm100_module_cutlass_fp4().build_and_load()
+    spec = gen_gemm_sm100_module_cutlass_fp4()
+    module = build_and_load(spec)
 
     class CutlassFp4GemmRunner(TunableRunner):
         def __init__(self):
@@ -470,7 +472,8 @@ def gen_gemm_sm90_module() -> JitSpec:
 
 @functools.cache
 def get_gemm_sm90_module():
-    module = gen_gemm_sm90_module().build_and_load()
+    spec = gen_gemm_sm90_module()
+    module = build_and_load(spec)
 
     # torch library for cutlass_segment_gemm_sm90
 
@@ -1734,9 +1737,9 @@ def gemm_fp8_nt_groupwise(
 
 @functools.cache
 def get_trtllm_fp4_gemm_module():
-    mod = trtllm_gemm_gen_module()
-    op = mod.build_and_load()
-    setup_cubin_loader(mod.get_library_path())
+    spec = trtllm_gemm_gen_module()
+    op = build_and_load(spec)
+    setup_cubin_loader(spec.get_library_path())
 
     class TrtllmFp4GemmRunner(TunableRunner):
         def __init__(self, use_8x4_sf_layout: bool = True):

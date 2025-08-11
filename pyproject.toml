@@ -29,12 +29,7 @@ backend-path = ["."]
 
 [tool.codespell]
 ignore-words-list = "3nd"
-skip = [
-    "build",
-    "3rdparty",
-    "dist",
-    ".venv"
-]
+skip = ["build", "3rdparty", "dist", ".venv"]
 
 [tool.setuptools]
 packages = [
@@ -58,6 +53,9 @@ packages = [
     "flashinfer.comm",
     "flashinfer.cudnn",
     "flashinfer.logits_processor",
+
+    # Imported kernels.
+    "fmha_v2",
 ]
 include-package-data = false
 
@@ -68,22 +66,12 @@ include-package-data = false
 "flashinfer.data.spdlog" = "3rdparty/spdlog"
 
 [tool.setuptools.package-data]
-"flashinfer.data" = [
-    "csrc/**",
-    "include/**",
-    "tvm_binding/**",
-    "version.txt"
-]
-"flashinfer.data.aot" = [
-    "**"
-]
-"flashinfer.data.cutlass" = [
-    "include/**",
-    "tools/util/include/**"
-]
-"flashinfer.data.spdlog" = [
-    "include/**",
-]
+"flashinfer.data" = ["csrc/**", "include/**", "tvm_binding/**", "version.txt"]
+"flashinfer.data.aot" = ["**"]
+"flashinfer.data.cutlass" = ["include/**", "tools/util/include/**"]
+"flashinfer.data.spdlog" = ["include/**"]
+"fmha_v2.data" = ["fmha_v2/src/**", "fmha_v2/templates/**", "fmha_v2/*.py"]
+
 
 [tool.mypy]
 ignore_missing_imports = false
@@ -113,7 +101,8 @@ ignore = [
     # Module level import not at top of file
     "E402",
     # star imports
-    "F405", "F403",
+    "F405",
+    "F403",
     # ambiguous name
     "E741",
     # line too long

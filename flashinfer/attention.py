@@ -20,6 +20,8 @@ from typing import Optional, Tuple, Union
 
 import torch
 
+from flashinfer.jit.core import build_and_load
+
 from .jit import gen_batch_attention_module
 from .utils import (
     MaskMode,
@@ -32,7 +34,8 @@ from .utils import (
 
 @functools.cache
 def get_holistic_attention_module(*args):
-    return gen_batch_attention_module(*args).build_and_load()
+    spec = gen_batch_attention_module(*args)
+    return build_and_load(spec)
 
 
 class BatchAttention:
@@ -73,7 +76,7 @@ class BatchAttention:
         head_dim_vo: int,
         page_size: int,
         causal: bool = False,
-        sm_scale: float = None,
+        sm_scale: Optional[float] = None,
         logits_soft_cap: Optional[float] = None,
         q_data_type: torch.dtype = torch.bfloat16,
         kv_data_type: torch.dtype = torch.bfloat16,

@@ -1,0 +1,383 @@
+{{copyright}}
+
+//We can disable the FADD trick for archs with F2IP
+#if {{disable_fadd_trick}} // disable_fadd_trick
+#ifdef USE_I2F_EMULATION_TRICK
+#undef USE_I2F_EMULATION_TRICK
+#endif // USE_I2F_EMULATION_TRICK
+
+#ifdef USE_F2I_EMULATION_TRICK
+#undef USE_F2I_EMULATION_TRICK
+#endif // USE_F2I_EMULATION_TRICK
+#endif // disable_fadd_trick
+
+#include <cuda.h>
+
+#if CUDA_VERSION >= {{min_cuda_version}}
+
+#include <fused_multihead_flash_attention_kernel_noloop.h>
+#include <fused_multihead_flash_attention_kernel_noloop_tiled.h>
+#include <fused_multihead_flash_attention_kernel.h>
+
+{{include_str}}
+
+{{local_ns_open}}
+{{bert_launch_params}}
+{{attn_mask_type_str}}
+
+#if 0 // has_noloop (unconditionally disabled since not maintained & not actively used)
+using Kernel_traits = fmha::{{kernel_traits}}<
+    fmha::{{instruction_traits}},
+    {{kv_loop_step}},
+    {{head_size}},
+    {{head_size_v}},
+    {{loop_step}},
+    {{warps_m}},
+    {{warps_n}},
+    {{ctas_per_head}},
+    {{kernel_flags}}>;
+
+extern "C"
+__global__
+void {{kernel_name}}({{params_type}} params){
+  fused_multihead_attention::device_{{kernel_variant}}<Kernel_traits>(params);
+}
+
+void {{launcher_name}}(
+    const {{params_type}} &params,
+    const Launch_params &launch_params,
+    cudaStream_t stream){
+
+  constexpr int smem_size = Kernel_traits::BYTES_PER_SMEM;
+  if( smem_size >= 48*1024 ) {
+    FMHA_CHECK_CUDA(cudaFuncSetAttribute({{kernel_name}},
+                                         cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                         smem_size));
+  }
+  dim3 grid(params.h, params.b);
+  {{kernel_name}}<<<grid, Kernel_traits::THREADS, Kernel_traits::BYTES_PER_SMEM, stream>>>(params);
+}
+
+#endif // has_noloop
+
+#if {{has_noloop}} && !{{tiled}} // has_noloop && !tiled
+using Kernel_traits_nl = fmha::{{kernel_traits}}<
+    fmha::{{instruction_traits}},
+    {{kv_loop_step}},
+    {{head_size}},
+    {{head_size_v}},
+    {{noloop_step}},
+    {{warps_m}},
+    {{warps_n}},
+    {{ctas_per_head}},
+    {{kernel_flags}} | 0x200 /* no_loop flag */,
+    /*dense mask*/ 2,
+    /*bmm2_fp16_epilogue*/ true,
+    {{output_dtype_}},
+    {{sage_block_size_q}},
+    {{sage_block_size_k}},
+    {{sage_block_size_v}}>;
+
+using Kernel_traits_nl_causal = fmha::{{kernel_traits}}<
+    fmha::{{instruction_traits}},
+    {{kv_loop_step}},
+    {{head_size}},
+    {{head_size_v}},
+    {{noloop_step}},
+    {{warps_m}},
+    {{warps_n}},
+    {{ctas_per_head}},
+    {{kernel_flags}} | 0x200 /* no_loop flag */,
+    /*causal mask*/ 3,
+    /*bmm2_fp16_epilogue*/ true,
+    {{output_dtype_}}>;
+
+using Kernel_traits_nl_sliding_or_chunked_causal = fmha::{{kernel_traits}}<
+    fmha::{{instruction_traits}},
+    {{kv_loop_step}},
+    {{head_size}},
+    {{head_size_v}},
+    {{noloop_step}},
+    {{warps_m}},
+    {{warps_n}},
+    {{ctas_per_head}},
+    {{kernel_flags}} | 0x200 /* no_loop flag */,
+    /*sliding window causal mask*/ 4,
+    /*bmm2_fp16_epilogue*/ true,
+    {{output_dtype_}}>;
+
+using Kernel_traits_nl_custom_mask = fmha::{{kernel_traits}}<
+    fmha::{{instruction_traits}},
+    {{kv_loop_step}},
+    {{head_size}},
+    {{head_size_v}},
+    {{noloop_step}},
+    {{warps_m}},
+    {{warps_n}},
+    {{ctas_per_head}},
+    {{kernel_flags}} | 0x200 /* no_loop flag */,
+    /*custom mask*/ 5,
+    /*bmm2_fp16_epilogue*/ true,
+    {{output_dtype_}}>;
+
+#if {{padding_mask}} // padding_mask
+
+extern "C"
+__global__
+void {{kernel_name}}_nl({{params_type}} params){
+  fused_multihead_attention::device_{{kernel_variant}}_nl<Kernel_traits_nl>(params);
+}
+
+#endif // padding mask
+
+#if {{causal_mask}} // causal_mask
+
+extern "C"
+__global__
+void {{causal_kernel_name}}_nl({{params_type}} params){
+  fused_multihead_attention::device_{{kernel_variant}}_nl<Kernel_traits_nl_causal>(params);
+}
+
+#endif // causal mask
+
+#if {{sliding_or_chunked_causal_mask}} // sliding_or_chunked_causal_mask
+
+extern "C"
+__global__
+void {{sliding_or_chunked_causal_kernel_name}}_nl({{params_type}} params){
+  fused_multihead_attention::device_{{kernel_variant}}_nl<Kernel_traits_nl_sliding_or_chunked_causal>(params);
+}
+
+#endif // sliding_or_chunked_causal_mask
+
+#if {{custom_mask}} // custom_mask
+
+extern "C"
+__global__
+void {{custom_mask_kernel_name}}_nl({{params_type}} params){
+  fused_multihead_attention::device_{{kernel_variant}}_nl<Kernel_traits_nl_custom_mask>(params);
+}
+
+#endif // custom_mask
+
+void {{launcher_name}}_nl(
+    {{const_fused_multihead_attention_params_v2_str}} &params,
+    const Launch_params &launch_params,
+    cudaStream_t stream){
+
+  // runtime q_loop_iters
+  int loop_iters = ( params.s + {{noloop_step}} - 1 )  / {{noloop_step}};
+  // dim3 grid(params.h, params.b, loop_iters);
+  dim3 grid(loop_iters, params.h, params.b); // better locality
+  constexpr int smem_size = Kernel_traits_nl::BYTES_PER_SMEM;
+  if( launch_params.attention_mask_type == Attention_mask_type::CAUSAL ) {
+#if {{causal_mask}} // causal_mask
+    if( smem_size >= 48*1024 ) {
+      FMHA_CHECK_CUDA(cudaFuncSetAttribute({{causal_kernel_name}}_nl,
+                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                           smem_size));
+    }
+    {{causal_kernel_name}}_nl<<<grid, Kernel_traits_nl::THREADS, Kernel_traits_nl::BYTES_PER_SMEM, stream>>>({{params_str}});
+#endif // causal mask
+  } else if( launch_params.attention_mask_type == Attention_mask_type::SLIDING_OR_CHUNKED_CAUSAL ) {
+#if {{sliding_or_chunked_causal_mask}} // sliding_or_chunked_causal_mask
+    if( smem_size >= 48*1024 ) {
+       FMHA_CHECK_CUDA(cudaFuncSetAttribute({{sliding_or_chunked_causal_kernel_name}}_nl,
+                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                        smem_size));
+    }
+    {{sliding_or_chunked_causal_kernel_name}}_nl<<<grid, Kernel_traits_nl::THREADS, Kernel_traits_nl::BYTES_PER_SMEM, stream>>>({{params_str}});
+#endif // sliding_or_chunked_causal_mask
+  } else if( launch_params.attention_mask_type == Attention_mask_type::PADDING ) {
+#if {{padding_mask}} // padding_mask
+    if( smem_size >= 48*1024 ) {
+      FMHA_CHECK_CUDA(cudaFuncSetAttribute({{kernel_name}}_nl,
+                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                           smem_size));
+    }
+    {{kernel_name}}_nl<<<grid, Kernel_traits_nl::THREADS, Kernel_traits_nl::BYTES_PER_SMEM, stream>>>({{params_str}});
+#endif // padding_mask
+  } else if( launch_params.attention_mask_type == Attention_mask_type::CUSTOM_MASK ) {
+#if {{custom_mask}} // custom_mask
+    if( smem_size >= 48*1024 ) {
+      FMHA_CHECK_CUDA(cudaFuncSetAttribute({{custom_mask_kernel_name}}_nl,
+                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                           smem_size));
+    }
+    {{custom_mask_kernel_name}}_nl<<<grid, Kernel_traits_nl::THREADS, Kernel_traits_nl::BYTES_PER_SMEM, stream>>>({{params_str}});
+#endif // custom mask
+  }
+}
+
+#endif // has_noloop && !tiled
+
+#if {{tiled}} // tiled
+
+using Kernel_traits_nl_tiled = fmha::{{kernel_traits}}<
+    fmha::{{instruction_traits}},
+    {{kv_loop_step}},
+    {{head_size}},
+    {{head_size_v}},
+    {{noloop_step}},
+    {{warps_m}},
+    {{warps_n}},
+    {{ctas_per_head}},
+    {{kernel_flags}} | 0x200 /* no_loop flag */,
+    /*dense mask*/ 2,
+    /*bmm2_fp16_epilogue*/ true,
+    {{output_dtype_}},
+    {{sage_block_size_q}},
+    {{sage_block_size_k}},
+    {{sage_block_size_v}}>;
+
+using Kernel_traits_nl_tiled_causal = fmha::{{kernel_traits}}<
+    fmha::{{instruction_traits}},
+    {{kv_loop_step}},
+    {{head_size}},
+    {{head_size_v}},
+    {{noloop_step}},
+    {{warps_m}},
+    {{warps_n}},
+    {{ctas_per_head}},
+    {{kernel_flags}} | 0x200 /* no_loop flag */,
+    /*causal mask*/ 3,
+    /*bmm2_fp16_epilogue*/ true,
+    {{output_dtype_}}>;
+
+using Kernel_traits_nl_tiled_sliding_or_chunked_causal = fmha::{{kernel_traits}}<
+    fmha::{{instruction_traits}},
+    {{kv_loop_step}},
+    {{head_size}},
+    {{head_size_v}},
+    {{noloop_step}},
+    {{warps_m}},
+    {{warps_n}},
+    {{ctas_per_head}},
+    {{kernel_flags}} | 0x200 /* no_loop flag */,
+    /*sliding window causal mask*/ 4,
+    /*bmm2_fp16_epilogue*/ true,
+    {{output_dtype_}}>;
+
+using Kernel_traits_nl_tiled_custom_mask = fmha::{{kernel_traits}}<
+    fmha::{{instruction_traits}},
+    {{kv_loop_step}},
+    {{head_size}},
+    {{head_size_v}},
+    {{noloop_step}},
+    {{warps_m}},
+    {{warps_n}},
+    {{ctas_per_head}},
+    {{kernel_flags}} | 0x200 /* no_loop flag */,
+    /*custom mask*/ 5,
+    /*bmm2_fp16_epilogue*/ true,
+    {{output_dtype_}}>;
+
+#if {{padding_mask}} // padding_mask
+
+extern "C"
+__global__
+void {{kernel_name}}_nl_tiled({{params_type}} params){
+  fused_multihead_attention::device_{{kernel_variant}}_nl_tiled<Kernel_traits_nl_tiled>(params);
+}
+
+#endif // padding_mask
+
+#if {{causal_mask}} // causal_mask
+
+extern "C"
+__global__
+void {{causal_kernel_name}}_nl_tiled({{params_type}} params){
+  fused_multihead_attention::device_{{kernel_variant}}_nl_tiled<Kernel_traits_nl_tiled_causal>(params);
+}
+
+#endif // causal mask
+
+#if {{sliding_or_chunked_causal_mask}} // sliding_or_chunked_causal_mask
+
+extern "C"
+__global__
+void {{sliding_or_chunked_causal_kernel_name}}_nl_tiled({{params_type}} params){
+  fused_multihead_attention::device_{{kernel_variant}}_nl_tiled<Kernel_traits_nl_tiled_sliding_or_chunked_causal>(params);
+}
+
+#endif // sliding_or_chunked_causal_mask
+
+#if {{custom_mask}} // custom_mask
+
+extern "C"
+__global__
+void {{custom_mask_kernel_name}}_nl_tiled({{params_type}} params){
+  fused_multihead_attention::device_{{kernel_variant}}_nl_tiled<Kernel_traits_nl_tiled_custom_mask>(params);
+}
+
+#endif // custom mask
+
+// Granular tiling
+void {{launcher_name}}_nl_tiled(
+    {{const_fused_multihead_attention_params_v2_str}} &params,
+    const Launch_params &launch_params,
+    cudaStream_t stream){
+  // runtime q_loop_iters
+  using Cta_tile_o = typename Kernel_traits_nl_tiled::Cta_tile_o;
+  int ctas_per_o_row = (params.d + Cta_tile_o::N - 1) / Cta_tile_o::N;
+  int loop_iters = ( params.s + {{noloop_step}} - 1 )  / {{noloop_step}};
+  dim3 grid(loop_iters * ctas_per_o_row, params.h, params.b);
+  constexpr int smem_size = Kernel_traits_nl_tiled::BYTES_PER_SMEM;
+  if( launch_params.attention_mask_type == Attention_mask_type::CAUSAL ) {
+#if {{causal_mask}} // causal_mask
+    if( smem_size >= 48*1024 ) {
+      FMHA_CHECK_CUDA(cudaFuncSetAttribute({{causal_kernel_name}}_nl_tiled,
+                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                           smem_size));
+    }
+    {{causal_kernel_name}}_nl_tiled<<<grid, Kernel_traits_nl_tiled::THREADS, Kernel_traits_nl_tiled::BYTES_PER_SMEM, stream>>>({{params_str}});
+#endif // causal mask
+  } else if( launch_params.attention_mask_type == Attention_mask_type::SLIDING_OR_CHUNKED_CAUSAL ) {
+#if {{sliding_or_chunked_causal_mask}} // sliding_or_chunked_causal_mask
+    if( smem_size >= 48*1024 ) {
+       FMHA_CHECK_CUDA(cudaFuncSetAttribute({{sliding_or_chunked_causal_kernel_name}}_nl_tiled,
+                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                        smem_size));
+    }
+    {{sliding_or_chunked_causal_kernel_name}}_nl_tiled<<<grid, Kernel_traits_nl_tiled::THREADS, Kernel_traits_nl_tiled::BYTES_PER_SMEM, stream>>>({{params_str}});
+#endif // sliding_or_chunked_causal_mask
+  } else if( launch_params.attention_mask_type == Attention_mask_type::PADDING ) {
+#if {{padding_mask}} // padding_mask
+    if( smem_size >= 48*1024 ) {
+      FMHA_CHECK_CUDA(cudaFuncSetAttribute({{kernel_name}}_nl_tiled,
+                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                           smem_size));
+    }
+    {{kernel_name}}_nl_tiled<<<grid, Kernel_traits_nl_tiled::THREADS, Kernel_traits_nl_tiled::BYTES_PER_SMEM, stream>>>({{params_str}});
+#endif // padding_mask
+  } else if( launch_params.attention_mask_type == Attention_mask_type::CUSTOM_MASK ) {
+#if {{custom_mask}} // custom_mask
+    if( smem_size >= 48*1024 ) {
+      FMHA_CHECK_CUDA(cudaFuncSetAttribute({{custom_mask_kernel_name}}_nl_tiled,
+                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                           smem_size));
+    }
+    {{custom_mask_kernel_name}}_nl_tiled<<<grid, Kernel_traits_nl_tiled::THREADS, Kernel_traits_nl_tiled::BYTES_PER_SMEM, stream>>>({{params_str}});
+#endif // custom mask
+  }
+}
+
+#endif // tiled
+
+#else // CUDA_VERSION >= {{min_cuda_version}}
+
+void {{launcher_name}}(const {{params_type}} &params, cudaStream_t stream){
+    assert(false && "Unsupported CUDA version");
+}
+
+void {{launcher_name}}_nl(const {{params_type}} &params, cudaStream_t stream){
+    assert(false && "Unsupported CUDA version");
+}
+
+void {{launcher_name}}_nl_tiled(const {{params_type}} &params, cudaStream_t stream){
+    assert(false && "Unsupported CUDA version");
+}
+
+#endif // CUDA_VERSION >= {{min_cuda_version}}
+{{local_ns_close}}
+"""

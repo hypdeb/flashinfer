@@ -1,14 +1,14 @@
-import dataclasses
 import logging
 import os
 import re
-import warnings
 from pathlib import Path
-from typing import List, Optional, Sequence, Union
+from typing import Iterable, List, Optional, Sequence, Union
 
 import torch
 import torch.utils.cpp_extension as torch_cpp_ext
 from filelock import FileLock
+
+from flashinfer.jit.abstractions import JitSpec
 
 from . import env as jit_env
 from .cpp_ext import generate_ninja_build_for_op, run_ninja
@@ -47,7 +47,17 @@ logger = FlashInferJITLogger("flashinfer.jit")
 def check_cuda_arch():
     # cuda arch check for fp8 at the moment.
     for cuda_arch_flags in torch_cpp_ext._get_cuda_arch_flags():
-        arch = int(re.search(r"compute_(\d+)", cuda_arch_flags).group(1))
+        compute_arch_match = re.search(r"compute_(\d+)", cuda_arch_flags)
+        if compute_arch_match is None:
+            raise RuntimeError(
+                f"No compute arch flag found in torch CUDA arch flags: {cuda_arch_flags}."
+            )
+        try:
+            arch = int(compute_arch_match.group(1))
+        except ValueError as int_conversion_exception:
+            raise RuntimeError(
+                f"Invalid compute arch flag ({compute_arch_match.group(0)}) found in torch CUDA arch flags: {cuda_arch_flags}."
+            ) from int_conversion_exception
         if arch < 75:
             raise RuntimeError("FlashInfer requires sm75+")
 
@@ -67,67 +77,32 @@ sm100a_nvcc_flags = [
 ]
 
 
-@dataclasses.dataclass
-class JitSpec:
-    name: str
-    sources: List[Path]
-    extra_cflags: Optional[List[str]]
-    extra_cuda_cflags: Optional[List[str]]
-    extra_ldflags: Optional[List[str]]
-    extra_include_dirs: Optional[List[Path]]
-    is_class: bool = False
-    needs_device_linking: bool = False
+def write_ninja(spec: JitSpec) -> None:
+    spec.ninja_path.parent.mkdir(parents=True, exist_ok=True)
+    content = generate_ninja_build_for_op(spec)
+    write_if_different(spec.ninja_path, content)
 
-    @property
-    def ninja_path(self) -> Path:
-        return jit_env.FLASHINFER_JIT_DIR / self.name / "build.ninja"
 
-    @property
-    def jit_library_path(self) -> Path:
-        return jit_env.FLASHINFER_JIT_DIR / self.name / f"{self.name}.so"
+def build(spec: JitSpec, verbose: bool) -> None:
+    tmpdir = get_tmpdir()
+    with FileLock(tmpdir / f"{spec.name}.lock", thread_local=False):
+        run_ninja(jit_env.FLASHINFER_JIT_DIR, spec.ninja_path, verbose)
 
-    def get_library_path(self) -> Path:
-        if self.aot_path.exists():
-            return self.aot_path
-        return self.jit_library_path
 
-    @property
-    def aot_path(self) -> Path:
-        return jit_env.FLASHINFER_AOT_DIR / self.name / f"{self.name}.so"
-
-    def write_ninja(self) -> None:
-        ninja_path = self.ninja_path
-        ninja_path.parent.mkdir(parents=True, exist_ok=True)
-        content = generate_ninja_build_for_op(
-            name=self.name,
-            sources=self.sources,
-            extra_cflags=self.extra_cflags,
-            extra_cuda_cflags=self.extra_cuda_cflags,
-            extra_ldflags=self.extra_ldflags,
-            extra_include_dirs=self.extra_include_dirs,
-            needs_device_linking=self.needs_device_linking,
-        )
-        write_if_different(ninja_path, content)
-
-    def build(self, verbose: bool) -> None:
-        tmpdir = get_tmpdir()
-        with FileLock(tmpdir / f"{self.name}.lock", thread_local=False):
-            run_ninja(jit_env.FLASHINFER_JIT_DIR, self.ninja_path, verbose)
-
-    def build_and_load(self, class_name: str = None):
-        if self.aot_path.exists():
-            so_path = self.aot_path
-        else:
-            so_path = self.jit_library_path
-            verbose = os.environ.get("FLASHINFER_JIT_VERBOSE", "0") == "1"
-            self.build(verbose)
-        load_class = class_name is not None
-        loader = torch.classes if load_class else torch.ops
-        loader.load_library(so_path)
-        if load_class:
-            cls = torch._C._get_custom_class_python_wrapper(self.name, class_name)
-            return cls
-        return getattr(loader, self.name)
+def build_and_load(spec: JitSpec, class_name: Optional[str] = None):
+    if spec.aot_path.exists():
+        so_path = spec.aot_path
+    else:
+        so_path = spec.jit_library_path
+        verbose = os.environ.get("FLASHINFER_JIT_VERBOSE", "0") == "1"
+        build(spec, verbose)
+    load_class = class_name is not None
+    loader = torch.classes if load_class else torch.ops
+    loader.load_library(str(so_path))
+    if load_class:
+        cls = torch._C._get_custom_class_python_wrapper(spec.name, class_name)
+        return cls
+    return getattr(loader, spec.name)
 
 
 def gen_jit_spec(
@@ -183,7 +158,7 @@ def gen_jit_spec(
         ),
         needs_device_linking=needs_device_linking,
     )
-    spec.write_ninja()
+    write_ninja(spec)
     return spec
 
 
@@ -196,10 +171,17 @@ def get_tmpdir() -> Path:
 
 
 def build_jit_specs(
-    specs: List[JitSpec],
+    specs: Iterable[JitSpec],
     verbose: bool = False,
     skip_prebuilt: bool = True,
 ) -> None:
+    """
+    JIT compiles the operations defined by the @param specs
+
+    @param specs: A collection of operation specifications to compile.
+    @param verbose: whether or not to build with verbose output for the compilation itself and the runtime. Also builds with line and debug info and without optimizations.
+    @param skip_prebuilt: whether or not to skip building operations when AOT (Ahead-Of-Time) compiled versions are available.
+    """
     lines: List[str] = []
     for spec in specs:
         if skip_prebuilt and spec.aot_path.exists():
@@ -215,28 +197,3 @@ def build_jit_specs(
         ninja_path = tmpdir / "flashinfer_jit.ninja"
         write_if_different(ninja_path, "\n".join(lines))
         run_ninja(jit_env.FLASHINFER_JIT_DIR, ninja_path, verbose)
-
-
-def load_cuda_ops(
-    name: str,
-    sources: List[Union[str, Path]],
-    extra_cflags: Optional[List[str]] = None,
-    extra_cuda_cflags: Optional[List[str]] = None,
-    extra_ldflags=None,
-    extra_include_paths=None,
-):
-    # TODO(lequn): Remove this function and use JitSpec directly.
-    warnings.warn(
-        "load_cuda_ops is deprecated. Use JitSpec directly.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    spec = gen_jit_spec(
-        name=name,
-        sources=sources,
-        extra_cflags=extra_cflags,
-        extra_cuda_cflags=extra_cuda_cflags,
-        extra_ldflags=extra_ldflags,
-        extra_include_paths=extra_include_paths,
-    )
-    return spec.build_and_load()

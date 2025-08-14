@@ -12,8 +12,8 @@ import os
 import subprocess
 from itertools import product
 
-from generator.constants import *
-from generator.abstractions import *
+from fmha_v2.constants import *
+from fmha_v2.abstractions import InputLayout
 
 pythonBoolean2cpp = {True: "true", False: "false"}
 
@@ -72,9 +72,6 @@ def get_makefile_code(specs_names):
         ]
     )
     return makefile_template.format(objects=objects, cubins=cubins, copyright=copyright)
-
-
-MAX_STGS_PER_LOOP = 4
 
 
 def encode_name(kernel_spec):
@@ -161,420 +158,6 @@ def encode_name(kernel_spec):
     # remove causal
     fname = fname.replace("causal_", "")
     return fname, lname, kname
-
-
-def get_GMMA_shape(instruction_traits, m, n, k, warps_n):
-    gmma_k = hopper_traits2shape[instruction_traits][-1]
-
-    # gmma shape is 64xgmma_nx16, gmma_n should be as big as possible, but not bigger than n
-    # gmma_n should also be smaller than 256
-    gmma_m = 64
-    gmma_n = 0
-    # find the largest supported n
-    n_supported = [(i + 1) * 8 for i in range(32)][::-1]
-    n_target = n // warps_n
-    assert n_target * warps_n == n
-    assert n_supported[0] == 256 and n_supported[-1] == 8
-    for cand_n in n_supported:
-        if n_target % cand_n == 0:
-            gmma_n = cand_n
-            break
-    assert gmma_n > 0, "No supported GMMA_N found!"
-
-    return gmma_m, gmma_n, gmma_k
-
-
-def enable_mutex(kspec):
-    fp32_accu_dtype = kspec.dtype in ["fp16_fp32", "bf16"]
-    enable_mutex = "false" if (fp32_accu_dtype or kspec.head_size <= 64) else "true"
-    return enable_mutex
-
-
-def enable_tma_store(kspec):
-    # TMA copies data in the 16B granularity.
-    return (
-        "true"
-        if (kspec.dtype in ["e4m3", "e4m3_fp32"] and kspec.head_size % 16 == 0)
-        else "false"
-    )
-
-
-def get_reg_count(kspec):
-    # if kspec.paged_kv_input and kspec.dtype in ['fp16', 'fp16_fp32', 'bf16']:
-    #     dma_reg_count = 72
-    #     compute_reg_count = 216
-    if kspec.input_layout == InputLayout.Q_PAGED_KV:
-        dma_reg_count = 56
-        compute_reg_count = 224
-    else:
-        dma_reg_count = 40
-        compute_reg_count = 232
-    return dma_reg_count, compute_reg_count
-
-
-def get_hopper_instruction_traits(instruction_traits, kernel_spec):
-    gmma_shape_p = get_GMMA_shape(
-        instruction_traits,
-        kernel_spec.loop_step,
-        kernel_spec.seq_len,
-        kernel_spec.head_size,
-        kernel_spec.warps_n,
-    )
-
-    instruction_traits_p = f"{instruction_traits}<{', '.join([str(x) for x in gmma_shape_p])}, false, false>"
-
-    gmma_shape_o = get_GMMA_shape(
-        instruction_traits,
-        kernel_spec.loop_step,
-        kernel_spec.head_size,
-        kernel_spec.seq_len,
-        1,
-    )
-    instruction_traits_o = f"{instruction_traits}<{', '.join([str(x) for x in gmma_shape_o])}, true, false>"
-
-    return instruction_traits_p, instruction_traits_o
-
-
-def get_effective_sm_and_name(kspec):
-    sm = kspec.sm
-    # Override the mma instruction with an older one.
-    if kspec.sm_mma in sm2name:
-        assert kspec.sm_mma <= kspec.sm, (
-            "Instruction version should be at most target arch"
-        )
-        sm = kspec.sm_mma
-    sm_name = sm2name[sm]
-    return sm, sm_name
-
-
-def selected_mask_types(kspec):
-    # by default, we generate all combinations.
-    # '1' means true, '0' means false.
-    padding_mask = "1"
-    causal_mask = "1"
-    sliding_or_chunked_causal_mask = "1"
-    custom_mask = "1"
-    # only generate certain needed combinations of input_layout and mask types for trt-llm.
-    if "GENERATE_CUBIN" in os.environ:
-        if kspec.sage_block_sizes:
-            # SageAttention only needs padding mask now
-            causal_mask = "0"
-            sliding_or_chunked_causal_mask = "0"
-            custom_mask = "0"
-        elif (kspec.head_size, kspec.head_size_v) == (192, 128):
-            # MLA context phase only needs causal mask now
-            padding_mask = "0"
-            sliding_or_chunked_causal_mask = "0"
-            custom_mask = "0"
-        elif (kspec.head_size, kspec.head_size_v) == (576, 512):
-            # MLA generation phase only needs padding mask (MtpMask) now
-            causal_mask = "0"
-            sliding_or_chunked_causal_mask = "0"
-            custom_mask = "0"
-        # encoder models (head_size = 32 / 64 / 128) need packed_qkv input layout + padding mask.
-        elif kspec.input_layout == InputLayout.PACKED_QKV:
-            # NOTE: 72 is added for vision transformer
-            if kspec.head_size not in [32, 64, 72, 128]:
-                padding_mask = "0"
-        # only cross attention (head_size = 32/64/128) needs contiguous_q_kv input layout + padding mask / custom_mask.
-        elif kspec.input_layout == InputLayout.CONTIGUOUS_Q_KV:
-            causal_mask = "0"
-            sliding_or_chunked_causal_mask = "0"
-            if kspec.head_size not in [32, 64, 72, 128]:
-                padding_mask = "0"
-                custom_mask = "0"
-        # paged kv cache is always needed in gpt variants.
-        # cross-attention also needs paged kv cache.
-        elif kspec.input_layout == InputLayout.Q_PAGED_KV:
-            if kspec.head_size not in [32, 64, 128]:
-                padding_mask = "0"
-
-        # alibi specialized kernels only need causal mask.
-        if kspec.alibi and kspec.warp_specialization:
-            padding_mask = "0"
-            sliding_or_chunked_causal_mask = "0"
-            custom_mask = "0"
-
-        # enable_attn_logit_softcapping kernels only need causal mask or sliding_or_chunked_causal_mask.
-        if kspec.enable_attn_logit_softcapping:
-            padding_mask = "0"
-            custom_mask = "0"
-
-    return padding_mask, causal_mask, sliding_or_chunked_causal_mask, custom_mask
-
-
-def get_kernel_code(kspec, kname, lname):
-    min_cuda_version = 0  # no restriction
-
-    # The architecture that determines the instruction.
-    effective_sm, sm_name = get_effective_sm_and_name(kspec)
-
-    if effective_sm >= 80:
-        min_cuda_version = 11000
-
-    launcher_name = lname
-    causal_kernel_name = kname.replace("__placeholder__", "_causal")
-    custom_mask_kernel_name = kname.replace("__placeholder__", "_custom_mask")
-    sliding_or_chunked_causal_kernel_name = kname.replace(
-        "__placeholder__", "_sliding_or_chunked_causal"
-    )
-    kernel_name = kname.replace("__placeholder__", "")
-
-    # FIXME: use separate parameters when generating cubins for trtllm.
-    if not kspec.cross_mha:
-        params_type = "bert::Fused_multihead_attention_params_v{}".format(kspec.version)
-    else:
-        params_type = "bert::Fused_multihead_attention_params_mhca"
-
-    if effective_sm < 90:
-        instruction_traits = sm_name.capitalize() + "_" + dtype2traits[kspec.dtype]
-    elif effective_sm == 90:
-        instruction_traits = (
-            sm_name.capitalize() + "_" + hopper_dtype2traits[kspec.dtype]
-        )
-        # for hopper, we differentiate instruction_traits_o and instruction_traits_p
-        instruction_traits_p, instruction_traits_o = get_hopper_instruction_traits(
-            instruction_traits, kspec
-        )
-        # print(instruction_traits_p, instruction_traits_o)
-
-    if effective_sm < 90:
-        if kspec.flash_attention:
-            kernel_variant = "flash_attention"
-        else:
-            kernel_variant = "1xN" if kspec.warps_m == 1 else "2x2"
-    elif effective_sm == 90:
-        if kspec.warps_n > 1:
-            # for hopper we slice the problem along the M dim.
-            kernel_variant = "4xN" + "_hopper"
-        else:
-            kernel_variant = "4x1" + "_hopper"
-
-    if effective_sm < 90:
-        kernel_traits = "Kernel_traits_"
-    elif effective_sm == 90:
-        kernel_traits = "FMHA_kernel_traits_hopper_"
-
-    if kspec.interleaved:
-        kernel_traits += "interleaved_v2"
-    elif kspec.cross_mha:
-        kernel_traits += "fmhca"
-    else:
-        kernel_traits += "v{}".format(kspec.version)
-
-    # decide whether to paged_kv kernel traits for ampere-style kernels.
-    if effective_sm < 90:
-        if kspec.input_layout == InputLayout.Q_PAGED_KV:
-            kernel_traits += "_paged_kv_cache"
-        elif kspec.input_layout == InputLayout.CONTIGUOUS_Q_KV:
-            kernel_traits += "_contiguous_kv_cache"
-
-    flags = 0
-    if kspec.ldgsts_q:
-        flags |= 1
-    if kspec.ldgsts_k:
-        flags |= 2
-    if kspec.ldgsts_v:
-        flags |= 4
-    if kspec.share_smem_k_v and not kspec.limit_qk_fragments:
-        flags |= 8
-    if kspec.has_scale_max:
-        flags |= 16
-    if not kspec.head_interleaved:
-        flags |= 32
-    if kspec.limit_qk_fragments:
-        flags |= 128
-    if kspec.limit_v_fragments:
-        flags |= 256
-    if kspec.has_noloop:
-        # NOTE do not use flags 512 = 0x200 as it is reserved; do not add to flags because it
-        # will be selectively added to no-loop kernel trait upon generating .cu templates
-        pass
-    if kspec.enable_attn_logit_softcapping:
-        flags |= 2048
-    if kspec.tiled:
-        flags |= 4096
-    if kspec.is_mtp:
-        flags |= 8192
-
-    # only generate certain needed combinations of input_layout and mask types for trt-llm.
-    padding_mask, causal_mask, sliding_or_chunked_causal_mask, custom_mask = (
-        selected_mask_types(kspec)
-    )
-
-    if any(
-        selected_mask_flag == "1" for selected_mask_flag in selected_mask_types(kspec)
-    ):
-        padding_mask, causal_mask, sliding_or_chunked_causal_mask, custom_mask = (
-            selected_mask_types(kspec)
-        )
-    else:
-        return None
-
-    kernel_flags = "0x{:02x}u".format(flags)
-
-    heads_interleaved_flag = pythonBoolean2cpp[kspec.head_interleaved]
-
-    disable_fadd_trick = (
-        1 if effective_sm >= 86 else 0
-    )  # this will force generating F2IP
-
-    enable_mutex_flag = enable_mutex(kspec)
-
-    has_alibi = pythonBoolean2cpp[kspec.alibi]
-
-    input_layout_flag = str(int(kspec.input_layout))
-
-    run_fct_name = (
-        "run_packed_qkv"
-        if kspec.input_layout == InputLayout.PACKED_QKV
-        else "run_separate_q_and_kv"
-    )
-
-    dma_reg_count, compute_reg_count = get_reg_count(kspec)
-
-    use_tma_store_flag = enable_tma_store(kspec)
-
-    enable_attn_logit_softcapping_flag = pythonBoolean2cpp[
-        kspec.enable_attn_logit_softcapping
-    ]
-
-    return_softmax_stats_flag = pythonBoolean2cpp[kspec.return_softmax_stats]
-
-    # needed by warpspec kernels.
-    fp8_kernel = kspec.dtype in ["e4m3", "e4m3_fp32"]
-    kernel_traits_header = (
-        "fmha::ws::Kernel_traits_Hopper_qgmma_e4m3_fp32<"
-        if fp8_kernel
-        else f"fmha::ws::Kernel_traits<fmha::{instruction_traits},"
-    )
-
-    # output type.
-    output_dtype_ = f"fmha::{dtype2OutputType[kspec.output_dtype if kspec.output_dtype is not None else kspec.dtype]}"
-
-    # sage attention block sizes.
-    sage_block_size_q = 0
-    sage_block_size_k = 0
-    sage_block_size_v = 0
-    if fp8_kernel and kspec.sage_block_sizes:
-        assert kspec.output_dtype is not None, (
-            "output_dtype must be specified for fp8 sage attention kernels"
-        )
-        sage_block_size_q = kspec.sage_block_sizes[0]
-        sage_block_size_k = kspec.sage_block_sizes[1]
-        sage_block_size_v = kspec.sage_block_sizes[2]
-
-    TMA_config = (
-        r"""
-    // TMA configuration
-    // Note that this may only need to init once during inference (for different layers)
-    // Reuse the same traits for initializing tma descriptors.
-    fmha::ws::DMA<Ktraits>::Host dma_host;
-    dma_host.init_params(params, launch_params, stream);
-    """
-        if not generate_cu_trtllm
-        else ""
-    )
-    params_str = (
-        "reinterpret_cast<bert::Fused_multihead_attention_params_v2 &>(params)"
-        if generate_cu_trtllm
-        else "params"
-    )
-    attn_mask_type_str = (
-        "using Attention_mask_type = ContextAttentionMaskType;"
-        if generate_cu_trtllm
-        else "using Attention_mask_type = fmha::Attention_mask_type;"
-    )
-    bert_launch_params = (
-        ""
-        if generate_cu_trtllm
-        else "using Launch_params = bert::Fused_multihead_attention_launch_params;"
-    )
-    include_str = (
-        '#include "../fused_multihead_attention_common.h"' if generate_cu_trtllm else ""
-    )
-    num_compute_groups_str = (
-        "" if generate_cu_trtllm else "static constexpr int NUM_COMPUTE_GROUPS = 2;"
-    )
-    fused_multihead_attention_params_v2_str = (
-        "Fused_multihead_attention_params_v2"
-        if generate_cu_trtllm
-        else f"{params_type}"
-    )
-    const_fused_multihead_attention_params_v2_str = (
-        "Fused_multihead_attention_params_v2"
-        if generate_cu_trtllm
-        else f"const {params_type}"
-    )
-    setmaxnreg_dma_str = (
-        r"""
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 900
-        const int DMA_REG_COUNT = {dma_reg_count};
-        asm volatile("{{setmaxnreg.dec.sync.aligned.u32  %0; \n\t}}" ::"n"(DMA_REG_COUNT));
-#else
-        asm volatile("trap;\n");
-#endif
-""".format(dma_reg_count=dma_reg_count)
-        if generate_cu_trtllm
-        else r"""
-        const int DMA_REG_COUNT = {dma_reg_count};
-        asm volatile("{{setmaxnreg.dec.sync.aligned.u32  %0; \n\t}}" ::"n"(DMA_REG_COUNT));""".format(
-            dma_reg_count=dma_reg_count
-        )
-    )
-    setmaxnreg_compute_str = (
-        r"""
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 900
-        const int COMPUTE_REG_COUNT = {compute_reg_count};
-        asm volatile("{{setmaxnreg.inc.sync.aligned.u32 %0; \n\t}}" ::"n"(COMPUTE_REG_COUNT));
-#else
-        asm volatile("trap;\n");
-#endif
-""".format(compute_reg_count=compute_reg_count)
-        if generate_cu_trtllm
-        else r"""
-        const int COMPUTE_REG_COUNT = {compute_reg_count};
-        asm volatile("{{setmaxnreg.inc.sync.aligned.u32 %0; \n\t}}" ::"n"(COMPUTE_REG_COUNT));""".format(
-            compute_reg_count=compute_reg_count
-        )
-    )
-    local_ns_open = ns_open if generate_cu_trtllm else ""
-    local_ns_close = ns_close if generate_cu_trtllm else ""
-
-    tmp = dict(locals(), **kspec._asdict())
-
-    if effective_sm < 90:
-        if kspec.flash_attention:
-            code = flash_attention_kernel_template.format(
-                **tmp,
-                copyright=copyright,
-                use_multi_cta=False,
-                MAX_STGS_PER_LOOP=MAX_STGS_PER_LOOP,
-            )
-        else:
-            use_multi_cta = 1 if kspec.ctas_per_head > 1 else 0
-            code = kernel_template.format(
-                **tmp,
-                copyright=copyright,
-                use_multi_cta=use_multi_cta,
-                MAX_STGS_PER_LOOP=MAX_STGS_PER_LOOP,
-            )
-    elif effective_sm == 90:
-        use_tma = 1
-        if kspec.ldgsts_q == True:
-            use_tma = 0
-        if kspec.warp_specialization:
-            code = kernel_hopper_warp_specialization_template.format(
-                **tmp,
-                copyright=copyright,
-                use_tma=use_tma,
-                bytes_per_elt=dtype2bytes[kspec.dtype],
-            )
-        else:
-            code = kernel_hopper_template.format(
-                **tmp, copyright=copyright, use_tma=use_tma
-            )
-    return code
 
 
 def get_api_code(specs_names):
@@ -1493,9 +1076,7 @@ def get_cubin_header(kernel_traits, specs_names):
     cubins_dict = {}
     cubin_lens_dict = {}
     for kspec, fname, lname, kname in specs_names:
-        if generate_cu_trtllm and not use_cubin_header(
-            kspec.sm, kspec.head_size, kspec.dtype
-        ):
+        if not use_cubin_header(kspec.sm, kspec.head_size, kspec.dtype):
             continue
         name = fname.replace(".", "_")
         data = "extern unsigned char cubin_{name}_cubin[];".format(name=name)
@@ -1736,7 +1317,7 @@ def get_cubin_header(kernel_traits, specs_names):
     # Add macros to only include needed cubins during compilation.
     for sm in cubins_dict.keys():
         macro_begin = f"#ifndef EXCLUDE_SM_{sm}"
-        macro_end = f"#endif\n"
+        macro_end = "#endif\n"
         cubins.extend([macro_begin] + cubins_dict[sm] + [macro_end])
         if sm in cubin_lens_dict:
             cubin_lens.extend([macro_begin] + cubin_lens_dict[sm] + [macro_end])
@@ -1745,14 +1326,9 @@ def get_cubin_header(kernel_traits, specs_names):
     unroll_config_v2 = ",\n".join(unroll_config_v2)
     cubins = "\n".join(cubins)
     cubin_lens = "\n".join(cubin_lens)
-    local_ns_open = ns_open
-    local_ns_close = ns_close if generate_cu_trtllm else "}"
-    launcher_line = (
-        """
-    void (*launcher)(Fused_multihead_attention_params_v2& params, const Launch_params& launch_params, cudaStream_t stream);"""
-        if generate_cu_trtllm
-        else ""
-    )
+    local_ns_open = ""
+    local_ns_close = "}"
+    launcher_line = ""
     if "GENERATE_CUBIN" in os.environ:
         code = """\
 {copyright}
@@ -1993,8 +1569,6 @@ def generate_files(specs_names):
     # this gives: kname, smem bytes, threads_per_cta, loop_step
     kernel_traits = [traits.split() for traits in output.splitlines()]
     cubin_header = get_cubin_header(kernel_traits, valid_specs_names)
-    if generate_cu_trtllm:
-        cubin_header = modify_cubin_header(cubin_header)
 
     with open("./generated/fmha_cubin.h", "w") as f:
         f.write(cubin_header)

@@ -69,3 +69,5 @@ dtype2typename = {
     "e4m3_fp16": "DATA_TYPE_E4M3",
     "e4m3_fp32": "DATA_TYPE_E4M3",
 }
+
+MAX_STGS_PER_LOOP = 4

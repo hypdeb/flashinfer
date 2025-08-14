@@ -55,8 +55,8 @@ class FMHAKernelSpec:
     alibi: bool = True
     enable_attn_logit_softcapping: bool = False
     return_softmax_stats: bool = False
-    disabled_mask_types: Optional[Tuple[int]] = None
+    disabled_mask_types: Optional[Tuple[int, int, int, int]] = None
     head_size_v: int = 0
-    sage_block_sizes: Optional[Tuple[int]] = None
+    sage_block_sizes: Optional[Tuple[int, int, int]] = None
     output_dtype: Optional[str] = None
     is_mtp: bool = False

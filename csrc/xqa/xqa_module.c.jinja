@@ -1,8 +1,179 @@
+{% set replacements = {
+    "torch.float32": "DeviceDataType::FP32",
+    "torch.float": "DeviceDataType::FP32",
+    "torch.float16": "DeviceDataType::FP16",
+    "torch.half": "DeviceDataType::FP16",
+    "torch.bfloat16": "DeviceDataType::BF16",
+    "torch.float8_e4m3fn": "DeviceDataType::FP8_E4M3",
+    "torch.uint8": "DeviceDataType::UINT8",
+    "torch.int8": "DeviceDataType::INT8",
+    "torch.int16": "DeviceDataType::INT16",
+    "torch.short": "DeviceDataType::INT16",
+    "torch.int32": "DeviceDataType::INT32",
+    "torch.int": "DeviceDataType::INT32",
+    "torch.bool": "DeviceDataType::BOOL",
+    }
+%}
+
+
 #include "pytorch_extension_utils.h"
-#include "xqa/mha.h"
+#include "xqa.h"
+#include "launcher_utils.h"
 
-void run_xqa() {
+#include <cstdint>
+#include <vector>
 
+namespace
+{
+
+struct IOPtrs
+{
+    void* inputPtr;
+    void* outputPtr;
+};
+
+IOPtrs calculateIOPtrs(
+    int tokenOffset,
+    void* qkv,
+    void* output)
+{
+    // Calculate the ptr to the start of the input in @ref qkv based on the provided token offset.
+    // NOTE: we do this here because Python and Pytorch, who are the usual callers for this, are very bad at doing this
+    // efficiently.
+    constexpr int qDimension = {{ num_q_heads }} * {{ head_dim }};
+    constexpr int inputTokenStrideElems = qDimension + 2 * {{ num_kv_heads }} * {{ head_dim }};
+    constexpr DeviceDataType inputDataType = {{ replacements.get(in_dtype, in_dtype) }};
+    constexpr DeviceDataType outputDataType = {{ replacements.get(out_dtype, out_dtype) }};
+    auto const inputPtr =
+        tke::extensions::cuda::advancePtr(qkv, tokenOffset * inputTokenStrideElems, inputDataType);
+
+    // Same for the output.
+    constexpr int outputTokenStrideElems = qDimension;
+    auto const offsetOutputPtr =
+        tke::extensions::cuda::advancePtr(output, tokenOffset * outputTokenStrideElems, outputDataType);
+
+    return {
+        .inputPtr  = inputPtr,
+        .outputPtr = offsetOutputPtr,
+    };
+}
+
+// TODO: figure out why we need this special alignment.
+inline constexpr std::size_t getMultiBlockWorkspaceAlignment()
+{
+    return roundUp<std::size_t>(kXQA_OUT_ELEM_SIZE * {{ num_q_heads }}
+                                                     / {{ num_kv_heads }}
+                                                     * {{ head_dim }},
+                                                        kCudaMemAlign);
+}
+
+std::vector<WorkspaceSegmentDescriptor> getGenerationWorkspaceSegmentsWithoutSpeculativeDecoding(
+    int numSequences
+    )
+{
+    constexpr int groupSize = {{ num_q_heads }} / {{ num_kv_heads }};
+    std::vector<WorkspaceSegmentDescriptor> workspaceSegments{};
+
+    // TODO: Document properly.
+    constexpr std::size_t multiBlockWorkspaceAlignment =
+        tke::kernels::attention::xqa::details::getMultiBlockWorkspaceAlignment();
+
+    // Reserve space to avoid reallocation issues
+    workspaceSegments.reserve(6);
+
+    // RoPE buffer
+    WorkspaceSegmentDescriptor ropeBufferDescriptor;
+    ropeBufferDescriptor.dataType = DeviceDataType::INT8;
+    ropeBufferDescriptor.numElements =
+        2UL * {{ head_dim }} * {{ num_q_heads }} * numSequences;
+    ropeBufferDescriptor.alignment = multiBlockWorkspaceAlignment;
+    workspaceSegments.push_back(ropeBufferDescriptor);
+
+    // Output conversion buffer
+    WorkspaceSegmentDescriptor outputConversionBufferDescriptor;
+    outputConversionBufferDescriptor.dataType = DeviceDataType::INT8;
+    outputConversionBufferDescriptor.numElements =
+        2UL * {{ head_dim }} * {{ num_q_heads }} * numSequences;
+    outputConversionBufferDescriptor.alignment = multiBlockWorkspaceAlignment;
+    workspaceSegments.push_back(outputConversionBufferDescriptor);
+
+    // rowMax
+    WorkspaceSegmentDescriptor rowMaxDescriptor;
+    rowMaxDescriptor.dataType    = DeviceDataType::FP32;
+    rowMaxDescriptor.numElements = roundUp(groupSize, 32U) * kXQAMaxNumSubSequences;
+    rowMaxDescriptor.alignment   = multiBlockWorkspaceAlignment;
+    workspaceSegments.push_back(rowMaxDescriptor);
+
+    // rowSum
+    WorkspaceSegmentDescriptor rowSumDescriptor;
+    rowSumDescriptor.dataType    = DeviceDataType::FP32;
+    rowSumDescriptor.numElements = roundUp(groupSize, 32U) * kXQAMaxNumSubSequences;
+    rowSumDescriptor.alignment   = multiBlockWorkspaceAlignment;
+    workspaceSegments.push_back(rowSumDescriptor);
+
+    // Additional workspace
+    WorkspaceSegmentDescriptor additionalDescriptor;
+    additionalDescriptor.dataType    = DeviceDataType::INT8;
+    additionalDescriptor.numElements = multiBlockWorkspaceAlignment * kXQAMaxNumSubSequences;
+    additionalDescriptor.alignment   = multiBlockWorkspaceAlignment;
+    workspaceSegments.push_back(additionalDescriptor);
+
+    // Just for safety
+    WorkspaceSegmentDescriptor alignmentBufferDescriptor;
+    alignmentBufferDescriptor.dataType    = DeviceDataType::INT8;
+    alignmentBufferDescriptor.numElements = multiBlockWorkspaceAlignment;
+    alignmentBufferDescriptor.alignment   = multiBlockWorkspaceAlignment;
+    workspaceSegments.push_back(alignmentBufferDescriptor);
+
+    return workspaceSegments;
+}
+
+}
+
+void run_xqa(
+    int numSequences,
+    int maxSequenceLength,
+    int maxInputSequenceLength,
+    int tokenOffset,
+    void* qkv,
+    void* sequenceLengthsDevice,
+    void* inputSequenceLengthsDevice,
+    void* kvCacheBlockOffsets,
+    void* kvCachePool,
+    void* ropeCosSinCache,
+    void* output,
+    void* workspace,
+    intptr_t cudaStream)
+{
+    auto const ioPtrs = calculateIOPtrs(tokenOffset,
+                                        qkv,
+                                        output);
+    auto const workspaceSegmentDescriptors =
+        getGenerationWorkspaceSegmentsWithoutSpeculativeDecoding(numSequences);
+    auto const workspaceSegments = getWorkspacePtrs(workspace, workspaceSegmentDescriptors);
+
+    auto* internalWorkspacePtr = workspaceSegments[0];
+
+    attention::xqa::XQAParams xqaParams = {
+        .qkv                         = attentionParameters.attentionInput,
+        .output                      = attentionParameters.output,
+        .workspace                   = internalWorkspacePtr,
+        .rotaryCosSinCache           = attentionParameters.rotaryCosSin,
+        .batchSize                   = attentionParameters.numSequences,
+        .maxSequenceLength           = attentionParameters.maxSequenceLength,
+        .sequenceLengths             = attentionParameters.sequenceLengthsDevice,
+        .kvCacheDequantizationFactor = op.attentionLayerParameters.kvCacheDequantizationFactor,
+        .outputScalingFactor         = op.attentionLayerParameters.outputScalingFactorDevice,
+    };
+
+    auto kvCacheBuffer = attention::createKVBlockArray(op.xqaKernel.attentionLayerDimensions,
+                                                       op.prefixCacheConfiguration,
+                                                       attentionParameters.primaryPoolPointer,
+                                                       attentionParameters.blockOffsets,
+                                                       attentionParameters.maxAttentionWindowSize,
+                                                       attentionParameters.cyclicAttentionWindowSize);
+
+    attention::xqa::run(op.xqaKernel, xqaParams, kvCacheBuffer, stream);
 }
 
 TORCH_LIBRARY_FRAGMENT(TORCH_EXTENSION_NAME, m) {

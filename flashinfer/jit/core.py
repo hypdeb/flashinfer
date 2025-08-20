@@ -142,10 +142,10 @@ def gen_jit_spec(
     check_cuda_arch()
     verbose = os.environ.get("FLASHINFER_JIT_VERBOSE", "0") == "1"
 
-    cflags = ["-O3", "-std=c++17", "-Wno-switch-bool"]
+    cflags = ["-O3", "-std=c++20", "-Wno-switch-bool"]
     cuda_cflags = [
         "-O3",
-        "-std=c++17",
+        "-std=c++20",
         f"--threads={min(os.cpu_count() or 4, 32)}",
         "-use_fast_math",
         "-DFLASHINFER_ENABLE_F16",

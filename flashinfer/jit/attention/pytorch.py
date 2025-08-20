@@ -33,6 +33,41 @@ from ..utils import (
 from .utils import generate_additional_params
 
 
+def gen_xqa_decode_module() -> JitSpec:
+    uri = "xqa"
+    xqa_source_dir = jit_env.FLASHINFER_CSRC_DIR / "xqa"
+    sources = [
+        # xqa_source_dir / "barriers.cuh",
+        # xqa_source_dir / "cuda_hint.cuh",
+        # xqa_source_dir / "defines.h",
+        # xqa_source_dir / "gmma_impl.cuh",
+        # xqa_source_dir / "gmma.cuh",
+        # xqa_source_dir / "hostUtils.h",
+        # xqa_source_dir / "ldgsts.cuh",
+        xqa_source_dir / "mha_sm90.cu",
+        # xqa_source_dir / "mha_stdheaders.cuh",
+        xqa_source_dir / "mha.cu",
+        # xqa_source_dir / "mha.h",
+        # xqa_source_dir / "mhaUtils.cuh",
+        # xqa_source_dir / "specDec.h",
+        # xqa_source_dir / "tensorMap.h",
+        # xqa_source_dir / "tma.h",
+        # xqa_source_dir / "utils.cuh",
+        # xqa_source_dir / "utils.h",
+    ]
+    gen_directory = jit_env.FLASHINFER_GEN_SRC_DIR / uri
+    os.makedirs(gen_directory, exist_ok=True)
+    with open(xqa_source_dir / "xqa_module.c.jinja") as f:
+        module_template = jinja2.Template(f.read())
+    generated_module_path = gen_directory / "xqa_module.cu"
+    write_if_different(
+        generated_module_path,
+        module_template.render(),
+    )
+    sources.append(generated_module_path)
+    return gen_jit_spec(uri, sources)
+
+
 def get_single_decode_uri(
     dtype_q: torch.dtype,
     dtype_kv: torch.dtype,
@@ -126,7 +161,7 @@ def gen_batch_mla_module(
     os.makedirs(gen_directory, exist_ok=True)
 
     if backend == "fa2":
-        with open(jit_env.FLASHINFER_CSRC_DIR / "batch_mla_config.jinja") as f:
+        with open(jit_env.FLASHINFER_CSRC_DIR / "batch_mla_config.c.jinja") as f:
             config_templ = jinja2.Template(f.read())
         generated_config_path = gen_directory / "batch_mla_config.inc"
         write_if_different(
@@ -154,7 +189,7 @@ def gen_batch_mla_module(
                 source = f.read()
             write_if_different(dest_path, source)
     elif backend == "fa3":
-        with open(jit_env.FLASHINFER_CSRC_DIR / "batch_mla_config.jinja") as f:
+        with open(jit_env.FLASHINFER_CSRC_DIR / "batch_mla_config.c.jinja") as f:
             config_templ = jinja2.Template(f.read())
         generated_config_path = gen_directory / "batch_mla_sm90_config.inc"
         write_if_different(
@@ -263,7 +298,7 @@ def gen_batch_decode_mla_module(
     gen_directory = jit_env.FLASHINFER_GEN_SRC_DIR / uri
     os.makedirs(gen_directory, exist_ok=True)
 
-    with open(jit_env.FLASHINFER_CSRC_DIR / "batch_decode_mla_config.jinja") as f:
+    with open(jit_env.FLASHINFER_CSRC_DIR / "batch_decode_mla_config.c.jinja") as f:
         config_templ = jinja2.Template(f.read())
     generated_config_path = gen_directory / "mla_config.inc"
     write_if_different(
@@ -637,10 +672,10 @@ def gen_customize_pod_module(
         additional_scalar_dtypes,
     )
 
-    with open(jit_env.FLASHINFER_CSRC_DIR / "pod_customize_config.jinja") as f:
+    with open(jit_env.FLASHINFER_CSRC_DIR / "pod_customize_config.c.jinja") as f:
         config_templ = jinja2.Template(f.read())
 
-    with open(jit_env.FLASHINFER_CSRC_DIR / "pod_kernel_inst.jinja") as f:
+    with open(jit_env.FLASHINFER_CSRC_DIR / "pod_kernel_inst.c.jinja") as f:
         kernel_inst_templ = jinja2.Template(f.read())
 
     kwargs = {
@@ -937,11 +972,11 @@ def gen_customize_single_decode_module(
     )
 
     with open(
-        jit_env.FLASHINFER_CSRC_DIR / "single_decode_customize_config.jinja"
+        jit_env.FLASHINFER_CSRC_DIR / "single_decode_customize_config.c.jinja"
     ) as f:
         config_templ = jinja2.Template(f.read())
 
-    with open(jit_env.FLASHINFER_CSRC_DIR / "single_decode_kernel_inst.jinja") as f:
+    with open(jit_env.FLASHINFER_CSRC_DIR / "single_decode_kernel_inst.c.jinja") as f:
         kernel_inst_templ = jinja2.Template(f.read())
 
     kwargs = {
@@ -1039,12 +1074,12 @@ def gen_customize_single_prefill_module(
         )
 
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / "single_prefill_customize_config.jinja"
+            jit_env.FLASHINFER_CSRC_DIR / "single_prefill_customize_config.c.jinja"
         ) as f:
             config_templ = jinja2.Template(f.read())
 
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / "single_prefill_kernel_inst.jinja"
+            jit_env.FLASHINFER_CSRC_DIR / "single_prefill_kernel_inst.c.jinja"
         ) as f:
             kernel_inst_templ = jinja2.Template(f.read())
 
@@ -1098,12 +1133,12 @@ def gen_customize_single_prefill_module(
             )
         )
 
-        _file_config = "single_prefill_sm90_customize_config.jinja"
+        _file_config = "single_prefill_sm90_customize_config.c.jinja"
         if fp8_enabled:
-            _file_kernel_inst = "single_prefill_fp8_sm90_kernel_inst.jinja"
+            _file_kernel_inst = "single_prefill_fp8_sm90_kernel_inst.c.jinja"
             _file_csrc = "single_prefill_fp8_sm90.cu"
         else:
-            _file_kernel_inst = "single_prefill_sm90_kernel_inst.jinja"
+            _file_kernel_inst = "single_prefill_sm90_kernel_inst.c.jinja"
             _file_csrc = "single_prefill_sm90.cu"
 
         with open(jit_env.FLASHINFER_CSRC_DIR / _file_config) as f:
@@ -1201,10 +1236,12 @@ def gen_customize_batch_decode_module(
         "use_logits_soft_cap": str(use_logits_soft_cap).lower(),
     }
 
-    with open(jit_env.FLASHINFER_CSRC_DIR / "batch_decode_customize_config.jinja") as f:
+    with open(
+        jit_env.FLASHINFER_CSRC_DIR / "batch_decode_customize_config.c.jinja"
+    ) as f:
         config_templ = jinja2.Template(f.read())
 
-    with open(jit_env.FLASHINFER_CSRC_DIR / "batch_decode_kernel_inst.jinja") as f:
+    with open(jit_env.FLASHINFER_CSRC_DIR / "batch_decode_kernel_inst.c.jinja") as f:
         kernel_inst_templ = jinja2.Template(f.read())
 
     generated_inc_str = config_templ.render(
@@ -1285,17 +1322,17 @@ def gen_customize_batch_prefill_module(
         )
 
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_customize_config.jinja"
+            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_customize_config.c.jinja"
         ) as f:
             config_templ = jinja2.Template(f.read())
 
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_paged_kernel_inst.jinja"
+            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_paged_kernel_inst.c.jinja"
         ) as f:
             paged_kernel_inst_templ = jinja2.Template(f.read())
 
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_ragged_kernel_inst.jinja"
+            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_ragged_kernel_inst.c.jinja"
         ) as f:
             ragged_kernel_inst_templ = jinja2.Template(f.read())
 
@@ -1358,14 +1395,16 @@ def gen_customize_batch_prefill_module(
             )
         )
 
-        _file_config = "batch_prefill_sm90_customize_config.jinja"
+        _file_config = "batch_prefill_sm90_customize_config.c.jinja"
         if fp8_enabled:
-            _file_paged_kernel_inst = "batch_prefill_fp8_paged_sm90_kernel_inst.jinja"
-            _file_ragged_kernel_inst = "batch_prefill_fp8_ragged_sm90_kernel_inst.jinja"
+            _file_paged_kernel_inst = "batch_prefill_fp8_paged_sm90_kernel_inst.c.jinja"
+            _file_ragged_kernel_inst = (
+                "batch_prefill_fp8_ragged_sm90_kernel_inst.c.jinja"
+            )
             _file_csrc = "batch_prefill_fp8_sm90.cu"
         else:
-            _file_paged_kernel_inst = "batch_prefill_paged_sm90_kernel_inst.jinja"
-            _file_ragged_kernel_inst = "batch_prefill_ragged_sm90_kernel_inst.jinja"
+            _file_paged_kernel_inst = "batch_prefill_paged_sm90_kernel_inst.c.jinja"
+            _file_ragged_kernel_inst = "batch_prefill_ragged_sm90_kernel_inst.c.jinja"
             _file_csrc = "batch_prefill_sm90.cu"
 
         with open(jit_env.FLASHINFER_CSRC_DIR / _file_config) as f:
@@ -1542,12 +1581,12 @@ def gen_customize_batch_attention_module(
         )
     )
     with open(
-        jit_env.FLASHINFER_CSRC_DIR / "batch_attention_customize_config.jinja"
+        jit_env.FLASHINFER_CSRC_DIR / "batch_attention_customize_config.c.jinja"
     ) as f:
         config_templ = jinja2.Template(f.read())
 
     with open(
-        jit_env.FLASHINFER_CSRC_DIR / "batch_attention_paged_kernel_inst.jinja"
+        jit_env.FLASHINFER_CSRC_DIR / "batch_attention_paged_kernel_inst.c.jinja"
     ) as f:
         paged_kernel_inst_templ = jinja2.Template(f.read())
 

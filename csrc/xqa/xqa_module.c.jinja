@@ -1,0 +1,10 @@
+#include "pytorch_extension_utils.h"
+#include "xqa/mha.h"
+
+void run_xqa() {
+
+}
+
+TORCH_LIBRARY_FRAGMENT(TORCH_EXTENSION_NAME, m) {
+  m.def("run_xqa", run_xqa);
+}

@@ -18,6 +18,7 @@ from .gemm import gen_gemm_module, gen_gemm_sm90_module, gen_gemm_sm100_module
 from .jit import JitSpec, build_jit_specs
 from .jit import env as jit_env
 from .jit import (
+    gen_xqa_decode_module,
     gen_batch_decode_module,
     gen_batch_mla_module,
     gen_batch_prefill_module,
@@ -99,6 +100,7 @@ def gen_fa2(
             use_sliding_window=use_sliding_window,
             use_logits_soft_cap=use_logits_soft_cap,
         ),
+        gen_xqa_decode_module(),
     ]
 
 
@@ -165,8 +167,6 @@ def gen_attention(
     add_gemma: bool,
     add_oai_oss: bool,
 ) -> List[JitSpec]:
-    head_dim_ckv = 512
-    head_dim_kpe = 64
     jit_specs: List[JitSpec] = []
 
     # FA2 MHA / MQA / GQA
@@ -301,6 +301,8 @@ def gen_attention(
     # MLA
     # NOTE: fp8 kv not supported in MLA
     mla_backend_ = ["fa2"]
+    head_dim_ckv = 512
+    head_dim_kpe = 64
     if has_sm90:
         mla_backend_.append("fa3")
     for dtype_qo in f16_dtype_:

@@ -98,17 +98,18 @@ def gen_customize_batch_prefill_tvm_binding(
         )
 
         with open(
-            jit_env.FLASHINFER_TVM_BINDING_DIR / "batch_prefill_customize_config.jinja"
+            jit_env.FLASHINFER_TVM_BINDING_DIR
+            / "batch_prefill_customize_config.c.jinja"
         ) as f:
             config_templ = jinja2.Template(f.read())
 
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_paged_kernel_inst.jinja"
+            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_paged_kernel_inst.c.jinja"
         ) as f:
             paged_kernel_inst_templ = jinja2.Template(f.read())
 
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_ragged_kernel_inst.jinja"
+            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_ragged_kernel_inst.c.jinja"
         ) as f:
             ragged_kernel_inst_templ = jinja2.Template(f.read())
 
@@ -180,17 +181,18 @@ def gen_customize_batch_prefill_tvm_binding(
 
         with open(
             jit_env.FLASHINFER_TVM_BINDING_DIR
-            / "batch_prefill_sm90_customize_config.jinja"
+            / "batch_prefill_sm90_customize_config.c.jinja"
         ) as f:
             config_templ = jinja2.Template(f.read())
 
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_paged_sm90_kernel_inst.jinja"
+            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_paged_sm90_kernel_inst.c.jinja"
         ) as f:
             paged_kernel_inst_templ = jinja2.Template(f.read())
 
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / "batch_prefill_ragged_sm90_kernel_inst.jinja"
+            jit_env.FLASHINFER_CSRC_DIR
+            / "batch_prefill_ragged_sm90_kernel_inst.c.jinja"
         ) as f:
             ragged_kernel_inst_templ = jinja2.Template(f.read())
 
@@ -291,7 +293,7 @@ def gen_customize_batch_decode_tvm_binding(
     ) as f:
         config_templ = jinja2.Template(f.read())
 
-    with open(jit_env.FLASHINFER_CSRC_DIR / "batch_decode_kernel_inst.jinja") as f:
+    with open(jit_env.FLASHINFER_CSRC_DIR / "batch_decode_kernel_inst.c.jinja") as f:
         kernel_inst_templ = jinja2.Template(f.read())
 
     kwargs |= {
@@ -340,7 +342,7 @@ def gen_batch_mla_tvm_binding(
     gen_directory = jit_env.FLASHINFER_GEN_SRC_DIR / uri
     os.makedirs(gen_directory, exist_ok=True)
 
-    with open(jit_env.FLASHINFER_TVM_BINDING_DIR / "batch_mla_config.jinja") as f:
+    with open(jit_env.FLASHINFER_TVM_BINDING_DIR / "batch_mla_config.c.jinja") as f:
         config_templ = jinja2.Template(f.read())
     generated_config_path = gen_directory / "batch_mla_config.inc"
     write_if_different(

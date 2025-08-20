@@ -27,6 +27,7 @@ from .attention import cudnn_fmha_gen_module as cudnn_fmha_gen_module
 from .attention import gen_batch_attention_module as gen_batch_attention_module
 from .attention import gen_batch_decode_mla_module as gen_batch_decode_mla_module
 from .attention import gen_batch_decode_module as gen_batch_decode_module
+from .attention import gen_xqa_decode_module as gen_xqa_decode_module
 from .attention import gen_batch_mla_module as gen_batch_mla_module
 from .attention import gen_batch_mla_tvm_binding as gen_batch_mla_tvm_binding
 from .attention import gen_batch_prefill_module as gen_batch_prefill_module

@@ -73,7 +73,7 @@ class BatchAttention:
         head_dim_vo: int,
         page_size: int,
         causal: bool = False,
-        sm_scale: float = None,
+        sm_scale: Optional[float] = None,
         logits_soft_cap: Optional[float] = None,
         q_data_type: torch.dtype = torch.bfloat16,
         kv_data_type: torch.dtype = torch.bfloat16,

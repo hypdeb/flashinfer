@@ -180,7 +180,7 @@ def gen_gemm_sm100_module_cutlass_fp4() -> JitSpec:
         jit_env.FLASHINFER_CSRC_DIR / "fp4_gemm_cutlass.cu",
     ]
 
-    with open(jit_env.FLASHINFER_CSRC_DIR / "fp4_gemm_cutlass.jinja") as f:
+    with open(jit_env.FLASHINFER_CSRC_DIR / "fp4_gemm_cutlass.c.jinja") as f:
         kernel_inst_templ = jinja2.Template(f.read())
         dtype_list = ["__nv_bfloat16", "half"]
         cta_m_n_k_list = [
@@ -225,7 +225,7 @@ def gen_gemm_sm100_module() -> JitSpec:
     source_paths = []
     for prefix in ["gemm_groupwise", "group_gemm_fp8_groupwise"]:
         with open(
-            jit_env.FLASHINFER_CSRC_DIR / f"{prefix}_sm100_kernel_inst.jinja"
+            jit_env.FLASHINFER_CSRC_DIR / f"{prefix}_sm100_kernel_inst.c.jinja"
         ) as f:
             kernel_inst_templ = jinja2.Template(f.read())
         dtype_in_list = [torch.float8_e4m3fn, torch.float8_e5m2]
@@ -250,7 +250,7 @@ def gen_gemm_sm100_module() -> JitSpec:
             )
             write_if_different(dest_path, source)
     prefix = "group_gemm_mxfp4_groupwise"
-    with open(jit_env.FLASHINFER_CSRC_DIR / f"{prefix}_sm100_kernel_inst.jinja") as f:
+    with open(jit_env.FLASHINFER_CSRC_DIR / f"{prefix}_sm100_kernel_inst.c.jinja") as f:
         kernel_inst_templ = jinja2.Template(f.read())
     dtype_a_list = [torch.float8_e4m3fn, torch.float8_e5m2]
     dtype_d_list = [torch.float16, torch.bfloat16]
@@ -430,7 +430,7 @@ def gen_gemm_sm90_module() -> JitSpec:
     gen_directory = jit_env.FLASHINFER_GEN_SRC_DIR / "gen_gemm_sm90"
     os.makedirs(gen_directory, exist_ok=True)
     source_paths = []
-    with open(jit_env.FLASHINFER_CSRC_DIR / "group_gemm_sm90_kernel_inst.jinja") as f:
+    with open(jit_env.FLASHINFER_CSRC_DIR / "group_gemm_sm90_kernel_inst.c.jinja") as f:
         kernel_inst_templ = jinja2.Template(f.read())
     for dtype_in, dtype_out in [
         (torch.float16, torch.float16),

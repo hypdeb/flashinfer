@@ -71,10 +71,10 @@ sm100a_nvcc_flags = [
 class JitSpec:
     name: str
     sources: List[Path]
-    extra_cflags: Optional[List[str]]
-    extra_cuda_cflags: Optional[List[str]]
-    extra_ldflags: Optional[List[str]]
-    extra_include_dirs: Optional[List[Path]]
+    extra_cflags: Optional[List[str]] = None
+    extra_cuda_cflags: Optional[List[str]] = None
+    extra_ldflags: Optional[List[str]] = None
+    extra_include_dirs: Optional[List[Path]] = None
     is_class: bool = False
     needs_device_linking: bool = False
 
@@ -114,7 +114,7 @@ class JitSpec:
         with FileLock(tmpdir / f"{self.name}.lock", thread_local=False):
             run_ninja(jit_env.FLASHINFER_JIT_DIR, self.ninja_path, verbose)
 
-    def build_and_load(self, class_name: str = None):
+    def build_and_load(self, class_name: Optional[str] = None):
         if self.aot_path.exists():
             so_path = self.aot_path
         else:

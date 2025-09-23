@@ -38,22 +38,24 @@ xqa_nvcc_flags = [
 
 
 def gen_xqa_module(
-    use_fp16: bool,
-    token_per_page: int,
+    input_dtype: torch.dtype,
+    num_tokens_per_block: int,
     head_size: int,
     head_grp_size: int,
     use_sliding_window: bool,
 ) -> JitSpec:
-    if use_fp16:
+    if input_dtype == torch.float16:
         flag_use_fp16 = ["-DINPUT_FP16=1", "-DDTYPE=__half"]
-    else:
+    elif input_dtype == torch.bfloat16:
         flag_use_fp16 = ["-DINPUT_FP16=0", "-DDTYPE=__nv_bfloat16"]
+    else:
+        raise ValueError(f"Invalid input_dtype: {input_dtype}, only torch.float16 and torch.bfloat16 are supported.")
 
-    if token_per_page not in [16, 32, 64, 128]:
+    if num_tokens_per_block not in [16, 32, 64, 128]:
         raise ValueError(
-            f"Invalid token_per_page: {token_per_page}, only 16, 32, 64, 128 are supported"
+            f"Invalid num_tokens_per_block: {num_tokens_per_block}, only 16, 32, 64, 128 are supported"
         )
-    flag_tokens_per_page = [f"-DTOKENS_PER_PAGE={token_per_page}"]
+    flag_tokens_per_page = [f"-DTOKENS_PER_PAGE={num_tokens_per_block}"]
 
     if head_size % 16 != 0 or head_size > 256 or head_size < 16:
         raise ValueError(
@@ -69,7 +71,7 @@ def gen_xqa_module(
         flag_sliding_window = ["-DSLIDING_WINDOW=0"]
 
     return gen_jit_spec(
-        f"xqa_use_fp16_{use_fp16}_token_per_page_{token_per_page}_head_size_{head_size}_head_grp_size_{head_grp_size}_use_sliding_window_{use_sliding_window}",
+        f"xqa_input_dtype_{input_dtype}_num_tokens_per_block_{num_tokens_per_block}_head_size_{head_size}_head_grp_size_{head_grp_size}_use_sliding_window_{use_sliding_window}",
         [
             jit_env.FLASHINFER_CSRC_DIR / "xqa/mha.cu",
             jit_env.FLASHINFER_CSRC_DIR / "xqa/xqa_wrapper.cu",
@@ -87,18 +89,18 @@ def gen_xqa_module(
 
 @functools.cache
 def get_xqa_module(
-    use_fp16: bool,
-    token_per_page: int,
+    input_dtype: torch.dtype,
+    num_tokens_per_block: int,
     head_size: int,
     head_grp_size: int,
     use_sliding_window: bool,
 ):
     module = gen_xqa_module(
-        use_fp16, token_per_page, head_size, head_grp_size, use_sliding_window
+        input_dtype, num_tokens_per_block, head_size, head_grp_size, use_sliding_window
     ).build_and_load()
 
     @register_custom_op(
-        f"flashinfer::xqa_use_fp16_{use_fp16}_token_per_page_{token_per_page}_head_size_{head_size}_head_grp_size_{head_grp_size}_use_sliding_window_{use_sliding_window}",
+        f"flashinfer::input_dtype_{input_dtype}_num_tokens_per_block_{num_tokens_per_block}_head_size_{head_size}_head_grp_size_{head_grp_size}_use_sliding_window_{use_sliding_window}",
         mutates_args=("output", "scratch"),
     )
     def xqa(
@@ -137,7 +139,7 @@ def get_xqa_module(
         )
 
     @register_fake_op(
-        f"flashinfer::xqa_use_fp16_{use_fp16}_token_per_page_{token_per_page}_head_size_{head_size}_head_grp_size_{head_grp_size}_use_sliding_window_{use_sliding_window}"
+        f"flashinfer::xqa_input_dtype_{input_dtype}_num_tokens_per_block_{num_tokens_per_block}_head_size_{head_size}_head_grp_size_{head_grp_size}_use_sliding_window_{use_sliding_window}"
     )
     def _fake_xqa(
         multiProcessorCount: int,
@@ -164,8 +166,7 @@ def get_xqa_module(
 
 
 def xqa(
-    use_fp16: bool,
-    token_per_page: int,
+    num_tokens_per_block: int,
     head_size: int,
     head_grp_size: int,
     use_sliding_window: bool,
@@ -186,7 +187,7 @@ def xqa(
     scratch: torch.Tensor,
 ) -> None:
     xqa_module = get_xqa_module(
-        use_fp16, token_per_page, head_size, head_grp_size, use_sliding_window
+        q.dtype, num_tokens_per_block, head_size, head_grp_size, use_sliding_window
     )
     xqa_module.xqa(
         multiProcessorCount,

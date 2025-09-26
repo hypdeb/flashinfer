@@ -742,3 +742,10 @@ def get_shuffle_matrix_sf_a_row_indices(
     row_indices = get_shuffle_matrix_a_row_indices(input_tensor, epilogue_tile_m)
 
     return row_indices
+
+def get_native_fp4_dtype():
+    """get native fp4 datatype if supported in the torch, otherwise return uint8."""
+    if hasattr(torch, "float4_e2m1fn_x2"):
+        return torch.float4_e2m1fn_x2
+    else:
+        return torch.uint8

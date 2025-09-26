@@ -39,6 +39,7 @@ from .fused_moe.utils import (
 )
 from .jit.cubin_loader import get_cubin
 from .utils import (
+    get_native_fp4_dtype,
     is_sm100a_supported,
     is_sm120a_supported,
     is_sm121a_supported,
@@ -1611,14 +1612,6 @@ def _is_cublas_fp4_available_in_cudnn():
     )
 
 
-def _get_native_fp4_dtype():
-    """get native fp4 datatype if supported in the torch, otherwise return uint8."""
-    if hasattr(torch, "float4_e2m1fn_x2"):
-        return torch.float4_e2m1fn_x2
-    else:
-        return torch.uint8
-
-
 # Global cudnn handle. need to make it per device in future
 _cudnn_handle = None
 
@@ -1757,8 +1750,8 @@ def execute_cudnn_gemm_fp4_graph(
     workspace_buffer,
 ):
     variant_pack = {
-        UIDs.A_UID.value: a.view(_get_native_fp4_dtype()),
-        UIDs.B_UID.value: b.view(_get_native_fp4_dtype()),
+        UIDs.A_UID.value: a.view(get_native_fp4_dtype()),
+        UIDs.B_UID.value: b.view(get_native_fp4_dtype()),
         UIDs.BLOCK_DESCALE_A_UID.value: a_descale,
         UIDs.BLOCK_DESCALE_B_UID.value: b_descale,
         UIDs.O_UID.value: c_final,
@@ -2079,9 +2072,9 @@ def mm_fp4(
         raise ValueError(
             f"K dimension mismatch in mm_fp4. got a.shape[1] = {a.shape[1]}, b.shape[0] = {b.shape[0]}"
         )
-    if a.dtype not in {torch.uint8, _get_native_fp4_dtype()} or b.dtype not in {
+    if a.dtype not in {torch.uint8, get_native_fp4_dtype()} or b.dtype not in {
         torch.uint8,
-        _get_native_fp4_dtype(),
+        get_native_fp4_dtype(),
     }:
         raise ValueError(
             f"a and b must have float4_e2m1fn_x2 packed into uint8. "
@@ -2210,6 +2203,138 @@ def mm_fp4(
         gemm_module.cutlass_fp4_gemm(
             a, b.T, a_descale, b_descale.T, alpha, out, workspace_buffer
         )
+    return out
+
+@functools.cache
+def get_trtllm_fp8_gemm_module():
+    mod = gen_trtllm_gen_gemm_module()
+    op = mod.build_and_load()
+    setup_cubin_loader(mod.get_library_path())
+
+    class TrtllmFp8GemmRunner(TunableRunner):
+        def get_valid_tactics(
+            self,
+            inputs: List[torch.Tensor],
+            profile: OptimizationProfile,
+        ) -> List[int]:
+            a_tensor_index = 0
+            b_tensor_index = 1
+
+            # NOTE : expects  A=MxK, B=NxK, out=MxN
+            a = profile.get_opt_shapes()[a_tensor_index]
+            b = profile.get_opt_shapes()[b_tensor_index]
+            m = a[0]
+            n = b[0]
+            k = a[1]
+            (
+                a,
+                b,
+                global_scale,
+                out,
+                workspace_buffer,
+            ) = inputs
+            type_e4m3 = 1
+            type_bf16 = 2
+            valid_tactics = list(
+                op.trtllm_gemm_tactics(m, n, k, type_e4m3, type_bf16, False)
+            )
+            print("valid_tactics", valid_tactics)
+            return valid_tactics
+
+        def forward(
+            self,
+            inputs: List[torch.Tensor],
+            tactic: int = -1,
+            do_preparation: bool = False,
+            **kwargs,
+        ) -> torch.Tensor:
+            (
+                a,
+                b,
+                global_scale,
+                out,
+                workspace_buffer,
+            ) = inputs
+            op.trtllm_gemm.default(
+                workspace_buffer,
+                a,
+                b,
+                None,
+                None,
+                global_scale,
+                out,
+                False,
+                False,
+                tactic,
+            )
+            return out
+
+    def gemm_runner():
+        return TrtllmFp8GemmRunner()
+
+    # Register the module
+    return SimpleNamespace(
+        gemm_runner=gemm_runner,
+    )
+
+def fp8_gemm_sm100(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    global_scale: torch.Tensor,
+    out: torch.Tensor,
+    workspace_buffer: torch.Tensor,
+    backends: List[str],
+) -> None:
+    tuner = AutoTuner.get()
+    a_tensor_index = 0
+    out_tensor_index = 3
+    tuning_config = TuningConfig(
+        dynamic_tensor_specs=(
+            DynamicTensorSpec(
+                (a_tensor_index,),
+                (-2,),
+                get_last_power_of_2_num_tokens_buckets,
+                last_positive_power_of_2,
+            ),
+        ),
+        constraint_specs=(
+            ConstraintSpec(
+                out_tensor_index, -2, lambda shapes: shapes[a_tensor_index][-2]
+            ),
+        ),
+    )
+    inputs = [A, B, global_scale, out, workspace_buffer]
+    runners: List[TunableRunner] = []
+    if "trtllm" in backends:
+        runners.append(get_trtllm_fp8_gemm_module().gemm_runner())
+    runner, tactic = tuner.choose_one(
+        "fp8_gemm",
+        runners,
+        tuning_config,
+        inputs,
+    )
+
+    runner(inputs=inputs, tactic=tactic)
+
+def gemm_fp8(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    global_scale: torch.Tensor,
+    out: torch.Tensor,
+    backend: Literal["trtllm", "auto"] = "trtllm",
+) -> torch.Tensor:
+    if backend == "trtllm":
+        backends = ["trtllm"]
+    elif backend == "auto":
+        backends = ["trtllm"]
+    else:
+        raise ValueError(f"Unsupported backend: {backend}")
+
+    workspace_buffer = _get_cache_buf(
+        "gemm_fp8_workspace", DEFAULT_WORKSPACE_SIZE, A.device
+    )
+
+    fp8_gemm_sm100(A, B, global_scale, out, workspace_buffer, backends)
     return out
 
 

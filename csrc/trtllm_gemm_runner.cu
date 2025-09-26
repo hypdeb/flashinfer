@@ -39,8 +39,8 @@ struct TrtllmGenGemmRunnerOptions {
   gemm::trtllm::gen::SfLayout sfLayoutB;
 };
 
-int64_t select_kernel_fp8(int32_t M, int32_t N, int32_t K,
-                          const gemm::gemm::GemmInterface& interface) {
+int64_t select_kernel_dsfp8(int32_t M, int32_t N, int32_t K,
+                            const gemm::gemm::GemmInterface& interface) {
   static constexpr const char* KERNEL_NAME_HIGH_N_K_RATIO =
       "gemm_Bfloat16_E4m3E4m3_Fp32_t128x8x128u2_s6_et64x8_m64x8x32_cga1x1x1_16dp256b_TN_transOut_"
       "noShflA_dsFp8_schedP2x2x1x3_sm100f";
@@ -70,6 +70,25 @@ int64_t select_kernel_fp8(int32_t M, int32_t N, int32_t K,
     kernel_name = KERNEL_NAME_DEFAULT;
   }
 
+  auto const& configs = interface.getGemmConfigs();
+  size_t const num_configs = interface.getNumGemmConfigs();
+
+  for (size_t i = 0; i < num_configs; ++i) {
+    if (std::string(configs[i].mFunctionName) == kernel_name) {
+      return static_cast<int64_t>(i);
+    }
+  }
+
+  TORCH_CHECK(false, "Kernel not found");
+}
+
+int64_t select_kernel_fp8(int32_t M, int32_t N, int32_t K,
+                          const gemm::gemm::GemmInterface& interface) {
+  static constexpr const char* KERNEL_NAME_SHUFFLEA_LAYOUTA_B =
+      "gemm_Bfloat16_E4m3E4m3_Fp32_t128x8x256u2_s4_et128x8_m128x8x32_cga1x1x1_16dp256b_BN_transOut_"
+      "schedS_sm100f";
+
+  std::string kernel_name = KERNEL_NAME_SHUFFLEA_LAYOUTA_B;
   auto const& configs = interface.getGemmConfigs();
   size_t const num_configs = interface.getNumGemmConfigs();
 
@@ -232,9 +251,13 @@ class TrtllmGenGemmRunner {
     return validTactics;
   }
 
-  int64_t selectHeuristic(int64_t m, int64_t n, int64_t k) const {
+  int64_t selectHeuristic(int64_t m, int64_t n, int64_t k, bool is_ds_fp8) const {
     if (mOptions.eltType == gemm::trtllm::gen::Dtype::E4m3) {
-      return select_kernel_fp8(m, n, k, gemm::gemm::GemmInterface());
+      if (is_ds_fp8) {
+        return select_kernel_dsfp8(m, n, k, gemm::gemm::GemmInterface());
+      } else {
+        return select_kernel_fp8(m, n, k, gemm::gemm::GemmInterface());
+      }
     } else if (mOptions.eltType == gemm::trtllm::gen::Dtype::E2m1) {
       auto sortedIndices = getValidTactics(m, n, k);
       TORCH_CHECK(!sortedIndices.empty(), "No valid tactic found");
@@ -251,9 +274,10 @@ class TrtllmGenGemmRunner {
   std::vector<int64_t> mPassingConfigIndices;
 };
 
-void trtllm_gemm(at::Tensor workspace_buffer, at::Tensor a, at::Tensor b, at::Tensor a_scale,
-                 at::Tensor b_scale, at::optional<at::Tensor> globalScale, at::Tensor out,
-                 bool use_8x4_sf_layout, int64_t tactic) {
+void trtllm_gemm(at::Tensor workspace_buffer, at::Tensor a, at::Tensor b,
+                 at::optional<at::Tensor> a_scale, at::optional<at::Tensor> b_scale,
+                 at::optional<at::Tensor> globalScale, at::Tensor out, bool use_8x4_sf_layout,
+                 bool is_ds_fp8, int64_t tactic) {
   TORCH_CHECK(a.device() == b.device(), "a and b must be on the same device");
   TORCH_CHECK(a.device() == out.device(), "a and out must be on the same device");
   TORCH_CHECK(a.is_cuda() && a.is_contiguous(), "a must be a contiguous CUDA tensor");
@@ -263,18 +287,31 @@ void trtllm_gemm(at::Tensor workspace_buffer, at::Tensor a, at::Tensor b, at::Te
               "workspace_buffer must be a contiguous CUDA tensor");
   TORCH_CHECK(workspace_buffer.sizes().size() == 1, "workspace_buffer must be a 1D CUDA tensor");
   TORCH_CHECK(a.dim() == 2, "a must be a matrix");
-  TORCH_CHECK(b.dim() == 2, "b must be a matrix");
+  TORCH_CHECK(b.dim() == 2 || b.dim() == 3,
+              "b must be a matrix or a block layout matrix (3D tensor with dims [N/BLOCK_SIZE, K, "
+              "BLOCK_SIZE])");
+  auto const isBBlockLayout = (b.dim() == 3);
   TORCH_CHECK(a.scalar_type() == b.scalar_type(), "a and b must have the same scalar type");
   TORCH_CHECK(
       a.scalar_type() == at::ScalarType::Float8_e4m3fn || a.scalar_type() == at::ScalarType::Byte,
       "a must be a Float8 or Byte(e2m1) tensor");
   bool is_fp8 = a.scalar_type() == at::ScalarType::Float8_e4m3fn;
   if (is_fp8) {
-    TORCH_CHECK(!globalScale.has_value(), "globalScale must be a none tensor");
+    if (is_ds_fp8) {
+      TORCH_CHECK(a_scale.has_value(), "a_scale must be provided for DSFP8 GEMM");
+      TORCH_CHECK(b_scale.has_value(), "b_scale must be provided for DSFP8 GEMM");
+      TORCH_CHECK(!globalScale.has_value(), "globalScale must NOT be provided for DSFP8 GEMM");
+    } else {
+      TORCH_CHECK(!a_scale.has_value(), "a_scale must NOT be provided for FP8 GEMM");
+      TORCH_CHECK(!b_scale.has_value(), "b_scale must NOT be provided for FP8 GEMM");
+      TORCH_CHECK(globalScale.has_value(), "globalScale must be provided for FP8 GEMM");
+    }
   } else {
-    TORCH_CHECK(a_scale.is_cuda() && a_scale.is_contiguous(),
+    TORCH_CHECK(a_scale.has_value(), "a_scale must be provided for E2m1 GEMM");
+    TORCH_CHECK(b_scale.has_value(), "b_scale must be provided for E2m1 GEMM");
+    TORCH_CHECK(a_scale.value().is_cuda() && a_scale.value().is_contiguous(),
                 "a_scale must be a contiguous CUDA tensor");
-    TORCH_CHECK(b_scale.is_cuda() && b_scale.is_contiguous(),
+    TORCH_CHECK(b_scale.value().is_cuda() && b_scale.value().is_contiguous(),
                 "b_scale must be a contiguous CUDA tensor");
     if (globalScale.has_value()) {
       TORCH_CHECK(globalScale.value().is_cuda() && globalScale.value().is_contiguous(),
@@ -284,8 +321,14 @@ void trtllm_gemm(at::Tensor workspace_buffer, at::Tensor a, at::Tensor b, at::Te
 
   int32_t m = a.size(0);
   int32_t k = is_fp8 ? a.size(1) : a.size(1) * 2;
-  int32_t n = b.size(0);
-  TORCH_CHECK(b.size(1) == a.size(1), "Matrix dimensions don't match for multiplication");
+  int32_t n = isBBlockLayout ? b.size(1) : b.size(0);
+  if (isBBlockLayout) {
+    auto const blockSize = b.size(2);
+    auto const kFromB = b.size(0) * blockSize;
+    TORCH_CHECK(kFromB == a.size(1), "Matrix dimensions don't match for multiplication");
+  } else {
+    TORCH_CHECK(b.size(1) == a.size(1), "Matrix dimensions don't match for multiplication");
+  }
   TORCH_CHECK(out.size(0) == m && out.size(1) == n, "Output tensor has wrong dimensions");
 
   auto runner = flashinfer::TrtllmGenGemmRunner(flashinfer::TrtllmGenGemmRunnerOptions{
@@ -297,15 +340,17 @@ void trtllm_gemm(at::Tensor workspace_buffer, at::Tensor a, at::Tensor b, at::Te
   });
 
   if (tactic == -1) {
-    tactic = runner.selectHeuristic(m, n, k);
+    tactic = runner.selectHeuristic(m, n, k, is_ds_fp8);
   }
 
   auto stream = at::cuda::getCurrentCUDAStream(a.device().index());
 
   auto runKernel = [&](void* workspace) {
-    runner.run(m, n, k, a.data_ptr(), a_scale.data_ptr(), b.data_ptr(), b_scale.data_ptr(),
-               out.data_ptr(), globalScale.has_value() ? globalScale.value().data_ptr() : nullptr,
-               nullptr, workspace, stream, a.device().index(), tactic);
+    auto* a_scale_ptr = a_scale.has_value() ? a_scale.value().data_ptr() : nullptr;
+    auto* b_scale_ptr = b_scale.has_value() ? b_scale.value().data_ptr() : nullptr;
+    auto* globalScale_ptr = globalScale.has_value() ? globalScale.value().data_ptr() : nullptr;
+    runner.run(m, n, k, a.data_ptr(), a_scale_ptr, b.data_ptr(), b_scale_ptr, out.data_ptr(),
+               globalScale_ptr, nullptr, workspace, stream, a.device().index(), tactic);
   };
 
   int64_t const required_workspace_size = runner.getWorkspaceSizeInBytes(m, n, k, tactic);

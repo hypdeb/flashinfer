@@ -11,8 +11,6 @@ from typing import Any, Callable, Dict, List, Set, Tuple, Union, Optional
 
 import torch
 
-# from tensorrt_llm.bindings.internal.runtime import delay_kernel
-# from tensorrt_llm.logger import logger
 from flashinfer.tllm_utils import delay_kernel
 
 from .jit.core import logger
@@ -332,6 +330,13 @@ def load_from_file(key):
     return False, 0, -1, None
 
 
+@dataclass(frozen=True)
+class AutoTunerCacheHit:
+    runner_id: int
+    tactic: int
+    profile: OptimizationProfile
+
+
 class AutoTuner:
     """AutoTuner for optimizing TensorRT-LLM operations.
 
@@ -368,9 +373,9 @@ class AutoTuner:
         self,
         custom_op: str,
         runners: List[TunableRunner],
-        input_shapes: Tuple[torch.Size],
+        input_shapes: Tuple[torch.Size, ...],
         tuning_config: TuningConfig,
-    ) -> Tuple[bool, int, int, OptimizationProfile]:
+    ) -> Optional[AutoTunerCacheHit]:
         """Search for cached profiling results matching the current configuration.
 
         Args:
@@ -379,8 +384,7 @@ class AutoTuner:
             profile (OptimizationProfile): Optimization profile
 
         Returns:
-            A tuple containing:
-            [is_cache_hit, runner_id, tactic, stored_profile]
+            An AutoTunerCacheHit object if a cache hit is found, otherwise None
         """
         for r in runners:
             cache_key = AutoTuner._get_cache_key(
@@ -393,9 +397,9 @@ class AutoTuner:
                 output = load_from_file(cache_key)
                 return output
             elif cache_key in self.profiling_cache:
-                return True, *self.profiling_cache[cache_key]
+                return AutoTunerCacheHit(*self.profiling_cache[cache_key])
 
-        return False, 0, -1, None
+        return None
 
     def choose_one(
         self,
@@ -431,22 +435,26 @@ class AutoTuner:
 
         # Early return if it's not tuning, use cache found one or fallback one
         if not self.is_tuning_mode:
-            is_cache_hit, runner_id, tactic, stored_profile = self.search_cache(
+            cache_hit = self.search_cache(
                 custom_op, runners, input_shapes, tuning_config
             )
-            runner = runners[runner_id]
             # TODO: check the stored runner and tactic can implement this shape here
             # Should not directly try (runner, tactic) here, or it will hurt a lot of inference perf.
 
             # Record the cache miss config.
             # Expect no cache miss in inference. Thus, any cache miss should be recorded.
-            if not is_cache_hit:
+            if cache_hit is None:
                 logger.debug(
                     f"[AutoTunner]: Using fallback tactic for {custom_op} with input shapes {input_shapes}"
                 )
                 logger.debug(
                     f"[AutoTunner]: Generated key{AutoTuner._get_cache_key(custom_op, runners[0], input_shapes, tuning_config)}"
                 )
+                runner = runners[0]
+                tactic = -1
+            else:
+                runner = runners[cache_hit.runner_id]
+                tactic = cache_hit.tactic
             return runner, tactic
 
         assert len(runners) > 0, "At least one runner is required"
@@ -458,69 +466,80 @@ class AutoTuner:
         # Record the total configs to try
         self.stats.tuned_op_total_configs[custom_op] = len(profiles)
 
+        # Go over the profiles and ensure all of them are cached.
         for p in profiles:
             tensors = self._prepare_input_tensors(p, inputs)
-            is_cache_hit, runner_id, tactic, _ = self.search_cache(
+            cache_hit = self.search_cache(
                 custom_op, runners, p.get_opt_shapes(), tuning_config
             )
-            if not is_cache_hit:
-                min_time = float("inf")
-                # Initialize runner and tactic as None in case of no valid tactic or runners are found
-                runner_id, tactic = None, None
-                for r_id, r in enumerate(runners):
-                    # TODO: use FakeTensor here.
-                    valid_tactics = r.get_valid_tactics(tensors, p)
-                    runner_arg_names = {
-                        p.name for p in inspect.signature(r.forward).parameters.values()
-                    }
-                    if "do_preparation" in runner_arg_names and len(valid_tactics) > 0:
-                        r(tensors, tactic=-1, do_preparation=True, **kwargs)
-                    for tac in valid_tactics:
-                        try:
-                            time_measured = self._profile_single_kernel(
-                                r, tensors, tac, **kwargs
-                            )
-                        except Exception as e:
-                            shapes = self._get_input_sizes(tensors)
 
-                            logger.error(
-                                f"[Autotuner]: Failed when profiling {r} {tac}, shapes={shapes}. Error occurred: {e}"
-                            )
+            # Already cached, skip it.
+            if cache_hit is not None:
+                continue
 
-                            # Record the failed profiling combinations
-                            if custom_op not in self.stats.failed_profiling_count:
-                                self.stats.failed_profiling_count[custom_op] = set()
-                            self.stats.failed_profiling_count[custom_op].add(
-                                AutoTuner._get_cache_key(
-                                    custom_op, r, p.get_opt_shapes(), tuning_config
-                                )
-                            )
+            # Not cached, profile it.
+            min_time = float("inf")
+            # Initialize runner and tactic as None in case of no valid tactic or runners are found
+            runner_id, tactic = None, None
+            for r_id, r in enumerate(runners):
+                # TODO: use FakeTensor here.
+                valid_tactics = r.get_valid_tactics(tensors, p)
+                print("valid_tactics according to tuner: ", valid_tactics)
+                runner_arg_names = {
+                    p.name for p in inspect.signature(r.forward).parameters.values()
+                }
+                if "do_preparation" in runner_arg_names and len(valid_tactics) > 0:
+                    r(tensors, tactic=-1, do_preparation=True, **kwargs)
+                for tac in valid_tactics:
+                    try:
+                        time_measured = self._profile_single_kernel(
+                            r, tensors, tac, **kwargs
+                        )
+                    except Exception as e:
+                        shapes = self._get_input_sizes(tensors)
 
-                            # Set time_measured to inf to notify the failure of the tactic. This can happen when `get_valid_tactics` mistakenly return wrong tactics
-                            # or some runtime error occurs during profiling.
-                            time_measured = float("inf")
-                        if time_measured < min_time:
-                            min_time = time_measured
-                            runner_id, tactic = r_id, tac
-                if runner_id is not None:
-                    # At least one valid (runner, tactic) pair is found
-                    cache_key = AutoTuner._get_cache_key(
-                        custom_op, runners[runner_id], p.get_opt_shapes(), tuning_config
-                    )
-                    # inspect call stack
-                    self.profiling_cache[cache_key] = (runner_id, tactic, p)
-                    self.stats.tuned_op_successful_configs[custom_op] = (
-                        self.stats.tuned_op_successful_configs.get(custom_op, 0) + 1
-                    )
-                    logger.debug(
-                        f"[Autotuner]: profiling chosen runner: {runners[runner_id]} {tactic} for {cache_key}"
-                    )
+                        logger.error(
+                            f"[Autotuner]: Failed when profiling {r} {tac}, shapes={shapes}. Error occurred: {e}"
+                        )
+
+                        # Record the failed profiling combinations
+                        if custom_op not in self.stats.failed_profiling_count:
+                            self.stats.failed_profiling_count[custom_op] = set()
+                        self.stats.failed_profiling_count[custom_op].add(
+                            AutoTuner._get_cache_key(
+                                custom_op, r, p.get_opt_shapes(), tuning_config
+                            )
+                        )
+
+                        # Set time_measured to inf to notify the failure of the tactic. This can happen when `get_valid_tactics` mistakenly return wrong tactics
+                        # or some runtime error occurs during profiling.
+                        time_measured = float("inf")
+                    if time_measured < min_time:
+                        min_time = time_measured
+                        runner_id, tactic = r_id, tac
+            if runner_id is not None:
+                # At least one valid (runner, tactic) pair is found
+                cache_key = AutoTuner._get_cache_key(
+                    custom_op, runners[runner_id], p.get_opt_shapes(), tuning_config
+                )
+                # inspect call stack
+                self.profiling_cache[cache_key] = (runner_id, tactic, p)
+                self.stats.tuned_op_successful_configs[custom_op] = (
+                    self.stats.tuned_op_successful_configs.get(custom_op, 0) + 1
+                )
+                logger.debug(
+                    f"[Autotuner]: profiling chosen runner: {runners[runner_id]} {tactic} for {cache_key}"
+                )
 
         # Get the best runner and tactic from cache
         # If no valid tactic is found, the fallback runner and tactic will be used
-        _, runner_id, tactic, _ = self.search_cache(
-            custom_op, runners, input_shapes, tuning_config
-        )
+        cache_hit = self.search_cache(custom_op, runners, input_shapes, tuning_config)
+        if cache_hit is None:
+            runner_id = 0
+            tactic = -1
+        else:
+            runner_id = cache_hit.runner_id
+            tactic = cache_hit.tactic
 
         return runners[runner_id], tactic
 

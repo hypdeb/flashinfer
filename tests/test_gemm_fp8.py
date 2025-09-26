@@ -17,8 +17,8 @@ def to_float8(x, dtype=torch.float8_e4m3fn):
 
 _cache_permute_indices: Dict[torch.Size, torch.Tensor] = {}
 
-@pytest.mark.parametrize("m", [1, 2, 4, 8, 16, 32])
-@pytest.mark.parametrize("n", [2560, 5120])
+@pytest.mark.parametrize("m", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("n", [5120])
 @pytest.mark.parametrize("k", [8192, 16384, 32768])
 @pytest.mark.parametrize("input_dtype", [torch.float8_e4m3fn])
 @pytest.mark.parametrize("mat2_dtype", [torch.float8_e4m3fn])

@@ -21,6 +21,7 @@ from .flashinfer_benchmark_utils import (
     filter_backends_by_compute_capability,
 )
 
+from tests.utils_fp8 import to_float8
 
 def run_gemm_test(args):
     """
@@ -155,15 +156,6 @@ def parse_gemm_args(line, parser):
     if args.verbose >= 1:
         print(f"[INFO] {args = }")
     return args
-
-
-def to_float8(x, dtype=torch.float8_e4m3fn):
-    finfo = torch.finfo(dtype)
-    min_val, max_val = x.aminmax()
-    amax = torch.maximum(min_val.abs(), max_val.abs()).clamp(min=1e-12)
-    scale = finfo.max / amax
-    x_scl_sat = (x * scale).clamp(min=finfo.min, max=finfo.max)
-    return x_scl_sat.to(dtype), scale.float().reciprocal()
 
 
 def testGemmFp8NtGroupwise(args):

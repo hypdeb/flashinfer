@@ -90,6 +90,7 @@ def download_file(
             # Handle URL downloads
             for attempt in range(1, retries + 1):
                 try:
+                    print("session: ", session)
                     response = session.get(source, timeout=timeout)
                     response.raise_for_status()
 

@@ -2323,6 +2323,38 @@ def gemm_fp8(
     out: torch.Tensor,
     backend: Literal["trtllm", "auto"] = "trtllm",
 ) -> torch.Tensor:
+    r"""GEMM FP8 optimized for low M dimension. The optimizations require special pre-processing for the input tensor B.
+    For this reason, this implementation is only recommended for scenarios where B can be pre-processed offline, once. Luckily, this
+    is often the case in inference, where B is a weight matrix that can be massaged on-load.
+    - First B has to be shuffled.
+    - Then, its layout has to be adjusted as blockwise row-major.
+      The blocksize is 128 for e4m3, and therefore, the K dimension must be divisible by 128.
+    Utilities to perform these operations are implemented in Flashinfer, and their usage is demonstrated in the tests for this operation.
+
+    Parameters
+    ----------
+    A: torch.Tensor
+        Input tensor, shape (m, k), fp8 e4m3.
+
+    B: torch.Tensor
+        Mat2 tensor, shape (n, k), fp8 e4m3.
+
+    global_scale: torch.Tensor
+        Scale tensor for the output, float.
+
+    out: Optional[torch.Tensor]
+        Out tensor, shape (m, n), bf16.
+
+    backend: Literal["trtllm", "auto"]
+        The backend to use for the operation. Defaults to ``"trtllm"``, as it is the only supported backend currently.
+
+    Returns
+    -------
+    out: torch.Tensor
+        Out tensor, shape (m, n), bf16, will be a reference to the output parameter, as only inplace is supported.
+
+    See tests/test_fp8_gemm.py for usage examples.
+    """
     if backend == "trtllm":
         backends = ["trtllm"]
     elif backend == "auto":

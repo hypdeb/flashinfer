@@ -35,7 +35,7 @@ FLASHINFER_CUBINS_REPOSITORY = os.environ.get(
 
 
 def download_file(
-    source, local_path, retries=3, delay=5, timeout=10, lock_timeout=30, session=None
+    source: str, local_path: str, retries: int = 3, delay: int = 5, timeout: int = 10, lock_timeout: int = 30, session=None
 ):
     """
     Downloads a file from a URL or copies from a local path to a destination.
@@ -77,6 +77,7 @@ def download_file(
             # Handle URL downloads
             for attempt in range(1, retries + 1):
                 try:
+                    print("session: ", session)
                     response = session.get(source, timeout=timeout)
                     response.raise_for_status()
 

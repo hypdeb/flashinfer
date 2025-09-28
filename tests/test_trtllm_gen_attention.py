@@ -9,6 +9,7 @@ from sink_attention_reference import sink_attention_unified
 
 import flashinfer
 from flashinfer.utils import FP4Tensor, ceil_div, round_up, get_compute_capability
+from tests.utils_fp8 import to_float8
 
 DTYPE_MAP = {
     "fp16": torch.float16,
@@ -30,15 +31,6 @@ def flip_coin(*args, **kwargs):
     param_tuple = args + tuple(sorted(kwargs.items()))
     hash_value = hash(param_tuple)
     return (hash_value % 2) == 0
-
-
-def to_float8(x, dtype=torch.float8_e4m3fn):
-    finfo = torch.finfo(dtype)
-    min_val, max_val = x.aminmax()
-    amax = torch.maximum(min_val.abs(), max_val.abs()).clamp(min=1e-12)
-    scale = finfo.max / amax * 0.1
-    x_scl_sat = (x * scale).clamp(min=finfo.min, max=finfo.max)
-    return x_scl_sat.to(dtype), scale.float().reciprocal()
 
 
 def generate_seq_lens_prefill(batch_size, max_q_len, max_in_kv_len):

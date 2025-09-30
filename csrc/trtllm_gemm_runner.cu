@@ -325,9 +325,10 @@ void trtllm_gemm(Tensor workspace_buffer, Tensor a, Tensor b, Optional<Tensor> a
   if (isBBlockLayout) {
     auto const blockSize = b->shape[2];
     auto const kFromB = b->shape[0] * blockSize;
-    TVM_FFI_ICHECK(kFromB == a->shape[1], "Matrix dimensions don't match for multiplication");
+    TVM_FFI_ICHECK(kFromB == a->shape[1]) << "Matrix dimensions don't match for multiplication";
   } else {
-    TVM_FFI_ICHECK(b->shape[1] == a->shape[1], "Matrix dimensions don't match for multiplication");
+    TVM_FFI_ICHECK(b->shape[1] == a->shape[1])
+        << "Matrix dimensions don't match for multiplication";
   }
   TVM_FFI_ICHECK(out->shape[0] == m && out->shape[1] == n) << "Output tensor has wrong dimensions";
 

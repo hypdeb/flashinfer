@@ -2206,11 +2206,12 @@ def mm_fp4(
         )
     return out
 
+
 @functools.cache
 def get_trtllm_fp8_gemm_module():
     mod = gen_trtllm_gen_gemm_module()
     op = mod.build_and_load()
-    setup_cubin_loader(mod.get_library_path())
+    setup_cubin_loader(str(mod.get_library_path()))
 
     class TrtllmFp8GemmRunner(TunableRunner):
         def get_valid_tactics(
@@ -2221,11 +2222,11 @@ def get_trtllm_fp8_gemm_module():
             a_tensor_index = 0
             b_tensor_index = 1
 
-            # NOTE : expects  A=MxK, B=NxK, out=MxN
+            # NOTE : expects  A=MxK, B=(K//B)xNxB, out=MxN
             a = profile.get_opt_shapes()[a_tensor_index]
             b = profile.get_opt_shapes()[b_tensor_index]
             m = a[0]
-            n = b[0]
+            n = b[1]
             k = a[1]
             (
                 a,
@@ -2239,7 +2240,6 @@ def get_trtllm_fp8_gemm_module():
             valid_tactics = list(
                 op.trtllm_gemm_tactics(m, n, k, type_e4m3, type_bf16, False)
             )
-            print("valid_tactics", valid_tactics)
             return valid_tactics
 
         def forward(
@@ -2278,7 +2278,8 @@ def get_trtllm_fp8_gemm_module():
         gemm_runner=gemm_runner,
     )
 
-def fp8_gemm_sm100(
+
+def trtllm_fp8_gemm_sm100(
     A: torch.Tensor,
     B: torch.Tensor,
     global_scale: torch.Tensor,
@@ -2309,13 +2310,14 @@ def fp8_gemm_sm100(
     if "trtllm" in backends:
         runners.append(get_trtllm_fp8_gemm_module().gemm_runner())
     runner, tactic = tuner.choose_one(
-        "fp8_gemm",
+        "trtllm_fp8_gemm",
         runners,
         tuning_config,
         inputs,
     )
 
     runner(inputs=inputs, tactic=tactic)
+
 
 def gemm_fp8(
     A: torch.Tensor,
@@ -2356,9 +2358,7 @@ def gemm_fp8(
 
     See tests/test_fp8_gemm.py for usage examples.
     """
-    if backend == "trtllm":
-        backends = ["trtllm"]
-    elif backend == "auto":
+    if backend == "trtllm" or backend == "auto":
         backends = ["trtllm"]
     else:
         raise ValueError(f"Unsupported backend: {backend}")
@@ -2367,7 +2367,7 @@ def gemm_fp8(
         "gemm_fp8_workspace", DEFAULT_WORKSPACE_SIZE, A.device
     )
 
-    fp8_gemm_sm100(A, B, global_scale, out, workspace_buffer, backends)
+    trtllm_fp8_gemm_sm100(A, B, global_scale, out, workspace_buffer, backends)
     return out
 
 

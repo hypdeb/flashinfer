@@ -15,6 +15,7 @@
  */
 
 #include <cuda.h>
+#include <tvm/ffi/error.h>
 
 #include <string>
 
@@ -99,7 +100,7 @@ int64_t select_kernel_fp8(int32_t M, int32_t N, int32_t K,
     }
   }
 
-  TORCH_CHECK(false, "Kernel not found");
+  TVM_FFI_LOG_AND_THROW(RuntimeError) << "Kernel not found for GEMM.";
 }
 
 class TrtllmGenGemmRunner {
@@ -310,10 +311,8 @@ void trtllm_gemm(Tensor workspace_buffer, Tensor a, Tensor b, Optional<Tensor> a
   } else {
     TVM_FFI_ICHECK(a_scale.has_value()) << "a_scale must be provided for E2m1 GEMM";
     TVM_FFI_ICHECK(b_scale.has_value()) << "b_scale must be provided for E2m1 GEMM";
-    TVM_FFI_ICHECK(a_scale.value().is_cuda() && a_scale.value().is_contiguous())
-        << "a_scale must be a contiguous CUDA tensor";
-    TVM_FFI_ICHECK(b_scale.value().is_cuda() && b_scale.value().is_contiguous())
-        << "b_scale must be a contiguous CUDA tensor";
+    CHECK_OPTIONAL_INPUT(a_scale);
+    CHECK_OPTIONAL_INPUT(b_scale);
     if (globalScale.has_value()) {
       CHECK_INPUT(globalScale.value());
     }

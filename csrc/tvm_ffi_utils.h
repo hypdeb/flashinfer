@@ -238,6 +238,9 @@ inline void check_shape(const tvm::ffi::Tensor& a, const tvm::ffi::Tensor& b, co
 #define CHECK_INPUT(x) \
   CHECK_CUDA(x);       \
   CHECK_CONTIGUOUS(x)
+#define CHECK_OPTIONAL_INPUT(x) \
+  CHECK_CUDA(x.value());        \
+  CHECK_CONTIGUOUS(x.value())
 #define CHECK_INPUT_TYPE(x, st) \
   TVM_FFI_ICHECK_EQ(x->dtype, st) << "Inconsistency of Tensor type: " #x;
 #define CHECK_INPUT_AND_TYPE(x, st) \

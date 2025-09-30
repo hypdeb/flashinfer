@@ -8,7 +8,7 @@ from flashinfer.fused_moe.core import (
     convert_to_block_layout,
     _maybe_get_cached_w2_permute_indices,
 )
-from utils_fp8 import to_float8
+from .utils_fp8 import to_float8
 
 _cache_permute_indices: Dict[torch.Size, torch.Tensor] = {}
 

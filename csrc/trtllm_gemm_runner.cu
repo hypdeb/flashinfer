@@ -289,10 +289,10 @@ void trtllm_gemm(Tensor workspace_buffer, Tensor a, Tensor b, Optional<Tensor> a
   CHECK_INPUT(out);
   CHECK_INPUT(workspace_buffer);
   CHECK_DIM(2, a);
-  TVM_FFI_ICHECK(b.dim() == 2 || b.dim() == 3)
+  TVM_FFI_ICHECK(b->ndim == 2 || b->ndim == 3)
       << "b must be a matrix or a block layout matrix (3D tensor with "
          "dims [N/BLOCK_SIZE, K, BLOCK_SIZE])";
-  auto const isBBlockLayout = (b.dim() == 3);
+  auto const isBBlockLayout = (b->ndim == 3);
   TVM_FFI_ICHECK_EQ(a->dtype, b->dtype);
   TVM_FFI_ICHECK(a->dtype == dl_float8_e4m3fn || a->dtype == dl_uint8)
       << "a must be a Float8 or Byte(e2m1) tensor";

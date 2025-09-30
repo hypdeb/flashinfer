@@ -3,7 +3,6 @@ import torch
 
 import flashinfer
 from flashinfer.testing.utils import bench_gpu_time, bench_gpu_time_with_cudagraph
-from tests.utils_fp8 import to_float8
 
 page_size = 16
 num_kv_heads = 4
@@ -58,6 +57,15 @@ def bench_trtllm_fmha(batch_size, seq_len, kv_cache_dtype):
     )
     print(f"execution time: {ms}ms")
     print(f"memory bandwidth: {io / ms / 1024 / 1024:.2f} GB/s")
+
+
+def to_float8(x, dtype=torch.float8_e4m3fn):
+    finfo = torch.finfo(dtype)
+    min_val, max_val = x.aminmax()
+    amax = torch.maximum(min_val.abs(), max_val.abs()).clamp(min=1e-12)
+    scale = finfo.max / amax * 0.1
+    x_scl_sat = (x * scale).clamp(min=finfo.min, max=finfo.max)
+    return x_scl_sat.to(dtype), scale.float().reciprocal()
 
 
 def bench_trtllm_fmha_wrapper(

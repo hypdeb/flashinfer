@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from flashinfer import autotune, bmm_fp8
 from flashinfer.utils import get_compute_capability
-from tests.utils_fp8 import to_float8
+from .utils_fp8 import to_float8
 
 
 @pytest.mark.parametrize("b", [1, 16])

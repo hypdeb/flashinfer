@@ -1,0 +1,255 @@
+/*
+ * Copyright (c) 2020-2025, NVIDIA CORPORATION.  All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <cuda.h>
+#include <tvm/ffi/container/array.h>
+#include <tvm/ffi/error.h>
+#include <tvm_ffi_utils.h>
+
+#include <vector>
+
+#include "flashinfer/exception.h"
+#include "flashinfer/trtllm/common.h"
+#include "flashinfer/trtllm/gemm/trtllmGen_gemm_export/Enums.h"
+#include "flashinfer/trtllm/gemm/trtllmGen_gemm_export/GemmInterface.h"
+#include "flashinfer/trtllm/gemm/trtllmGen_gemm_export/trtllm/gen/DtypeDecl.h"
+#include "flashinfer/trtllm/gemm/trtllmGen_gemm_export/trtllm/gen/SfLayoutDecl.h"
+
+namespace {
+static thread_local gemm::gemm::GemmInterface::ModuleCache globalTrtllmGenFlavoredGemmModuleCache;
+}  // namespace
+
+namespace flashinfer {
+
+struct TrtllmGenFlavoredGemmRunnerOptions {
+  gemm::trtllm::gen::Dtype eltType;
+  gemm::trtllm::gen::Dtype outputType;
+};
+
+gemm::gemm::GemmData createGemmData(int64_t m, int64_t n, int64_t k) {
+  gemm::gemm::GemmData gemmData{};
+
+  // Dims
+  gemmData.mProblemDimensions.mM = n;
+  gemmData.mProblemDimensions.mN = m;
+  gemmData.mProblemDimensions.mK = k;
+  gemmData.mProblemDimensions.mRank = 0;
+  gemmData.mProblemDimensions.mWorldSize = 1;
+
+  return gemmData;
+}
+
+class TrtllmGenFlavoredGemmRunner {
+ public:
+  explicit TrtllmGenFlavoredGemmRunner(TrtllmGenFlavoredGemmRunnerOptions const& options)
+      : mOptions(options) {
+    // Select a GEMM kernel config to use
+    auto const gemm = gemm::gemm::GemmInterface();
+    auto const configs = gemm.getGemmConfigs();
+
+    mPassingConfigIndices.clear();
+
+    for (size_t i = 0; i < gemm.getNumGemmConfigs(); ++i) {
+      auto const configOptions = configs[i].mOptions;
+
+      if (configOptions.mDtypeA == mOptions.eltType &&
+          configOptions.mDtypeC == mOptions.outputType &&
+          configOptions.mTransposeMmaOutput == true &&
+          configOptions.mLayoutA == gemm::gemm::MatrixLayout::BlockMajorK &&
+          configOptions.mUseShuffledMatrixA) {
+        mPassingConfigIndices.push_back(i);
+      }
+    }
+
+    FLASHINFER_CHECK(
+        mPassingConfigIndices.size() > 0,
+        "No valid flavored TRTLLM-GEN GEMM kernel was found for the given data types.");
+  }
+
+  int64_t getWorkspaceSizeInBytes(int64_t m, int64_t n, int64_t k, int64_t tactic) {
+    auto gemm = gemm::gemm::GemmInterface();
+    auto const configs = gemm.getGemmConfigs();
+    FLASHINFER_CHECK(tactic >= 0 && tactic < gemm.getNumGemmConfigs(),
+                     "Invalid tactic in getWorkspaceSizeInBytes");
+    auto const config = configs[tactic];
+
+    auto const gemmData = createGemmData(m, n, k);
+
+    return gemm.getWorkspaceSizeInBytes(config, gemmData);
+  }
+
+  void run(int64_t m, int64_t n, int64_t k, void const* a, void const* b, void* c, void* cScale,
+           void* workspace, CUstream stream, int32_t device_index, int64_t tactic) {
+    auto gemm = gemm::gemm::GemmInterface();
+    auto const configs = gemm.getGemmConfigs();
+    TVM_FFI_ICHECK(tactic >= 0 && tactic < gemm.getNumGemmConfigs()) << "Invalid tactic id in run";
+    auto const& config = configs[tactic];
+
+    gemm::gemm::GemmData gemmData = createGemmData(m, n, k);
+
+    // Inputs
+    gemmData.mInputBuffers.mPtrA = b;
+    gemmData.mInputBuffers.mPtrB = a;
+    gemmData.mInputBuffers.mPtrScaleC = cScale;
+
+    // Outputs
+    gemmData.mOutputBuffers.mPtrC = c;
+
+    TVM_FFI_ICHECK(gemm.isValidConfig(config, gemmData))
+        << "The selected tactic points to a TRTLLM-GEN flavored GEMM kernel that is not valid for "
+           "the given problem size.";
+
+    int32_t const multiProcessorCount = [device_index]() {
+      static thread_local int32_t cached_multi_processor_count = -1;
+      static thread_local int cached_device_index = -1;
+
+      if (device_index == cached_device_index && cached_multi_processor_count != -1) {
+        return cached_multi_processor_count;
+      } else {
+        int32_t count;
+        cudaError_t cudaStatus =
+            cudaDeviceGetAttribute(&count, cudaDevAttrMultiProcessorCount, device_index);
+        TVM_FFI_ICHECK(cudaStatus == cudaSuccess)
+            << "Failed to get device attribute: " << cudaGetErrorString(cudaStatus);
+        cached_multi_processor_count = count;
+        cached_device_index = device_index;
+        return count;
+      }
+    }();
+
+    TVM_FFI_ICHECK(gemm.run(config, workspace, gemmData, static_cast<void*>(stream),
+                            multiProcessorCount, true, globalTrtllmGenFlavoredGemmModuleCache) == 0)
+        << "Error occurred when running flavored TRTLLM-GEN GEMM!";
+  }
+
+  std::vector<int64_t> getValidTactics(int64_t m, int64_t n, int64_t k) const {
+    auto const gemm = gemm::gemm::GemmInterface();
+    auto const configs = gemm.getGemmConfigs();
+
+    auto const gemmData = createGemmData(m, n, k);
+
+    std::vector<int64_t> validTactics{};
+    for (auto const& configIndex : mPassingConfigIndices) {
+      auto const& config = configs[configIndex];
+      if (gemm.isValidConfig(config, gemmData)) {
+        validTactics.push_back(configIndex);
+      }
+    }
+    return validTactics;
+  }
+
+ private:
+  TrtllmGenFlavoredGemmRunnerOptions mOptions;
+  std::vector<int64_t> mPassingConfigIndices;
+};
+
+using tvm::ffi::Array;
+using tvm::ffi::Optional;
+
+void trtllm_flavored_gemm(Tensor workspace_buffer, Tensor a, Tensor b, Tensor globalScale,
+                          Tensor out, int64_t tactic) {
+  if (tactic == -1) {
+    TVM_FFI_LOG_AND_THROW(RuntimeError)
+        << "Default tactic is not supported for flavored TRTLLM-GEN GEMM. Please use auto-tuning "
+           "to find the best kernel for your problem.";
+  }
+  CHECK_DEVICE(a, b);
+  CHECK_DEVICE(a, out);
+  CHECK_INPUT(a);
+  CHECK_INPUT(b);
+  CHECK_INPUT(out);
+  CHECK_INPUT(workspace_buffer);
+  CHECK_DIM(2, a);
+  TVM_FFI_ICHECK(b->ndim == 3) << "b must be a block layout matrix (3D tensor with "
+                                  "dims [N/BLOCK_SIZE, K, BLOCK_SIZE])";
+  TVM_FFI_ICHECK_EQ(a->dtype, b->dtype);
+  TVM_FFI_ICHECK(a->dtype == dl_float8_e4m3fn) << "a must be a Float8 tensor";
+
+  int32_t m = a->shape[0];
+  int32_t k = a->shape[1];
+  int32_t n = b->shape[1];
+  auto const blockSize = b->shape[2];
+  auto const kFromB = b->shape[0] * blockSize;
+  TVM_FFI_ICHECK(kFromB == a->shape[1]) << "Matrix dimensions don't match for multiplication";
+  TVM_FFI_ICHECK(out->shape[0] == m && out->shape[1] == n) << "Output tensor has wrong dimensions";
+
+  auto runner =
+      flashinfer::TrtllmGenFlavoredGemmRunner(flashinfer::TrtllmGenFlavoredGemmRunnerOptions{
+          .eltType = gemm::trtllm::gen::Dtype::E4m3,
+          .outputType = gemm::trtllm::gen::Dtype::Bfloat16,
+      });
+
+  auto stream = get_stream(a->device);
+
+  int64_t const required_workspace_size = runner.getWorkspaceSizeInBytes(m, n, k, tactic);
+  int64_t const provided_workspace_size =
+      get_numel(workspace_buffer) * get_element_size(workspace_buffer);
+  if (provided_workspace_size < required_workspace_size) {
+    TVM_FFI_LOG_AND_THROW(RuntimeError)
+        << "The size of the provided workspace to the TRTLLM-GEN flavored GEMM is too small. "
+           "Please use the provided workspace sizing function to pre-allocate an adequate "
+           "workspace.";
+  }
+
+  runner.run(m, n, k, a->data, b->data, out->data, globalScale->data, workspace_buffer->data,
+             stream, a->device.device_id, tactic);
+}
+
+enum class Dtype : int64_t {
+  E2m1 = 0,
+  E4m3 = 1,
+  Bfloat16 = 2,
+};
+
+Array<int64_t> trtllm_flavored_gemm_tactics(int64_t m, int64_t n, int64_t k, int64_t input_dtype,
+                                            int64_t output_dtype) {
+  TVM_FFI_ICHECK(input_dtype == static_cast<int64_t>(Dtype::E4m3)) << "Unsupported input dtype";
+  TVM_FFI_ICHECK_EQ(output_dtype, static_cast<int64_t>(Dtype::Bfloat16))
+      << "Unsupported output dtype";
+
+  auto runner =
+      flashinfer::TrtllmGenFlavoredGemmRunner(flashinfer::TrtllmGenFlavoredGemmRunnerOptions{
+          .eltType = gemm::trtllm::gen::Dtype::E4m3,
+          .outputType = gemm::trtllm::gen::Dtype::Bfloat16,
+      });
+
+  return runner.getValidTactics(m, n, k);
+}
+
+int64_t getWorkspaceSizeInBytes(int64_t m, int64_t n, int64_t k, int64_t tactic) {
+  auto gemm = gemm::gemm::GemmInterface();
+  auto const configs = gemm.getGemmConfigs();
+  FLASHINFER_CHECK(tactic >= 0 && tactic < gemm.getNumGemmConfigs(),
+                   "Invalid tactic in getWorkspaceSizeInBytes");
+  auto const config = configs[tactic];
+
+  auto const gemmData = createGemmData(m, n, k);
+
+  return gemm.getWorkspaceSizeInBytes(config, gemmData);
+}
+
+namespace trtllm_cubin_loader {
+#include <flashinfer/cubin_loader.h>
+}
+
+}  // namespace flashinfer
+
+// FIXME: help me name this thing better...
+// Exposes 'flavored' GEMMs that require some pre-processing of the inputs
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_flavored_gemm, flashinfer::trtllm_flavored_gemm);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_flavored_gemm_tactics,
+                              flashinfer::trtllm_flavored_gemm_tactics);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(get_workspace_size_in_bytes, flashinfer::getWorkspaceSizeInBytes);

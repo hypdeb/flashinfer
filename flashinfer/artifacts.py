@@ -79,7 +79,7 @@ class ArtifactPath:
         "e6f22dcc3fdeb29ff87af2f4a2cb3d30b8d273e0/batched_gemm-45beda1-ee6a802"
     )
     TRTLLM_GEN_GEMM: str = (
-        "e03f4a13c168664e68828f8d9c7ea8b305bcc9ab/gemm-45beda1-3cb8fe2"
+        "a1e600dc091ada6f98720270dfdffa53554b198e/gemm-45beda1-9b113e3"
     )
     CUDNN_SDPA: str = "4c623163877c8fef5751c9c7a59940cd2baae02e/fmha/cudnn"
     DEEPGEMM: str = "51d730202c9eef782f06ecc950005331d85c5d4b/deep-gemm"

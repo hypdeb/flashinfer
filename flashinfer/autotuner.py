@@ -251,13 +251,13 @@ def autotune(tune_mode: bool = True):
     AutoTuner.get().is_tuning_mode = tune_mode
     autotune_enabled = tune_mode and not old_mode
     if autotune_enabled:
-        logger.info("[Autotuner]: Autotuning process starts ...")
+        logger.debug("[Autotuner]: Autotuning process starts ...")
     try:
         yield
     finally:
         AutoTuner.get().is_tuning_mode = old_mode
         if autotune_enabled:
-            logger.info("[Autotuner]: Autotuning process ends")
+            logger.debug("[Autotuner]: Autotuning process ends")
 
 
 @dataclass
@@ -484,7 +484,6 @@ class AutoTuner:
             for r_id, r in enumerate(runners):
                 # TODO: use FakeTensor here.
                 valid_tactics = r.get_valid_tactics(tensors, p)
-                print("valid_tactics according to tuner: ", valid_tactics)
                 runner_arg_names = {
                     p.name for p in inspect.signature(r.forward).parameters.values()
                 }

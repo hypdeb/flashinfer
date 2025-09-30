@@ -40,8 +40,8 @@ struct TrtllmGenGemmRunnerOptions {
   gemm::trtllm::gen::SfLayout sfLayoutB;
 };
 
-int64_t select_kernel_dsfp8(int32_t M, int32_t N, int32_t K,
-                            const gemm::gemm::GemmInterface& interface) {
+int64_t select_kernel_fp8(int32_t M, int32_t N, int32_t K,
+                          const gemm::gemm::GemmInterface& interface) {
   static constexpr const char* KERNEL_NAME_HIGH_N_K_RATIO =
       "gemm_Bfloat16_E4m3E4m3_Fp32_t128x8x128u2_s6_et64x8_m64x8x32_cga1x1x1_16dp256b_TN_transOut_"
       "noShflA_dsFp8_schedP2x2x1x3_sm100f";
@@ -81,25 +81,6 @@ int64_t select_kernel_dsfp8(int32_t M, int32_t N, int32_t K,
   }
 
   TVM_FFI_ICHECK(false) << "Kernel not found";
-}
-
-int64_t select_kernel_fp8(int32_t M, int32_t N, int32_t K,
-                          const gemm::gemm::GemmInterface& interface) {
-  static constexpr const char* KERNEL_NAME_SHUFFLEA_LAYOUTA_B =
-      "gemm_Bfloat16_E4m3E4m3_Fp32_t128x8x256u2_s4_et128x8_m128x8x32_cga1x1x1_16dp256b_BN_transOut_"
-      "schedS_sm100f";
-
-  std::string kernel_name = KERNEL_NAME_SHUFFLEA_LAYOUTA_B;
-  auto const& configs = interface.getGemmConfigs();
-  size_t const num_configs = interface.getNumGemmConfigs();
-
-  for (size_t i = 0; i < num_configs; ++i) {
-    if (std::string(configs[i].mFunctionName) == kernel_name) {
-      return static_cast<int64_t>(i);
-    }
-  }
-
-  TORCH_CHECK(false, "Kernel not found");
 }
 
 class TrtllmGenGemmRunner {
@@ -253,13 +234,9 @@ class TrtllmGenGemmRunner {
     return validTactics;
   }
 
-  int64_t selectHeuristic(int64_t m, int64_t n, int64_t k, bool is_ds_fp8) const {
+  int64_t selectHeuristic(int64_t m, int64_t n, int64_t k) const {
     if (mOptions.eltType == gemm::trtllm::gen::Dtype::E4m3) {
-      if (is_ds_fp8) {
-        return select_kernel_dsfp8(m, n, k, gemm::gemm::GemmInterface());
-      } else {
-        return select_kernel_fp8(m, n, k, gemm::gemm::GemmInterface());
-      }
+      return select_kernel_fp8(m, n, k, gemm::gemm::GemmInterface());
     } else if (mOptions.eltType == gemm::trtllm::gen::Dtype::E2m1) {
       auto sortedIndices = getValidTactics(m, n, k);
       TVM_FFI_ICHECK(!sortedIndices.empty()) << "No valid tactic found";
@@ -279,41 +256,26 @@ class TrtllmGenGemmRunner {
 using tvm::ffi::Array;
 using tvm::ffi::Optional;
 
-void trtllm_gemm(Tensor workspace_buffer, Tensor a, Tensor b, Optional<Tensor> a_scale,
-                 Optional<Tensor> b_scale, Optional<Tensor> globalScale, Tensor out,
-                 bool use_8x4_sf_layout, bool is_ds_fp8, int64_t tactic) {
+void trtllm_gemm(Tensor workspace_buffer, Tensor a, Tensor b, Tensor a_scale, Tensor b_scale,
+                 Optional<Tensor> globalScale, Tensor out, bool use_8x4_sf_layout, int64_t tactic) {
   CHECK_DEVICE(a, b);
   CHECK_DEVICE(a, out);
   CHECK_INPUT(a);
   CHECK_INPUT(b);
   CHECK_INPUT(out);
   CHECK_INPUT(workspace_buffer);
+  TVM_FFI_ICHECK_EQ(workspace_buffer->ndim, 1);
   CHECK_DIM(2, a);
-  TVM_FFI_ICHECK(b.dim() == 2 || b.dim() == 3)
-      << "b must be a matrix or a block layout matrix (3D tensor with "
-         "dims [N/BLOCK_SIZE, K, BLOCK_SIZE])";
-  auto const isBBlockLayout = (b.dim() == 3);
+  CHECK_DIM(2, b);
   TVM_FFI_ICHECK_EQ(a->dtype, b->dtype);
   TVM_FFI_ICHECK(a->dtype == dl_float8_e4m3fn || a->dtype == dl_uint8)
       << "a must be a Float8 or Byte(e2m1) tensor";
   bool is_fp8 = a->dtype == dl_float8_e4m3fn;
   if (is_fp8) {
-    if (is_ds_fp8) {
-      TVM_FFI_ICHECK(a_scale.has_value()) << "a_scale must be provided for DSFP8 GEMM";
-      TVM_FFI_ICHECK(b_scale.has_value()) << "b_scale must be provided for DSFP8 GEMM";
-      TVM_FFI_ICHECK(!globalScale.has_value()) << "globalScale must NOT be provided for DSFP8 GEMM";
-    } else {
-      TVM_FFI_ICHECK(!a_scale.has_value()) << "a_scale must NOT be provided for FP8 GEMM";
-      TVM_FFI_ICHECK(!b_scale.has_value()) << "b_scale must NOT be provided for FP8 GEMM";
-      TVM_FFI_ICHECK(globalScale.has_value()) << "globalScale must be provided for FP8 GEMM";
-    }
+    TVM_FFI_ICHECK(!globalScale.has_value()) << "globalScale must be a none tensor";
   } else {
-    TVM_FFI_ICHECK(a_scale.has_value()) << "a_scale must be provided for E2m1 GEMM";
-    TVM_FFI_ICHECK(b_scale.has_value()) << "b_scale must be provided for E2m1 GEMM";
-    TVM_FFI_ICHECK(a_scale.value().is_cuda() && a_scale.value().is_contiguous())
-        << "a_scale must be a contiguous CUDA tensor";
-    TVM_FFI_ICHECK(b_scale.value().is_cuda() && b_scale.value().is_contiguous())
-        << "b_scale must be a contiguous CUDA tensor";
+    CHECK_INPUT(a_scale);
+    CHECK_INPUT(b_scale);
     if (globalScale.has_value()) {
       CHECK_INPUT(globalScale.value());
     }
@@ -322,13 +284,7 @@ void trtllm_gemm(Tensor workspace_buffer, Tensor a, Tensor b, Optional<Tensor> a
   int32_t m = a->shape[0];
   int32_t k = is_fp8 ? a->shape[1] : a->shape[1] * 2;
   int32_t n = b->shape[0];
-  if (isBBlockLayout) {
-    auto const blockSize = b->shape[2];
-    auto const kFromB = b->shape[0] * blockSize;
-    TVM_FFI_ICHECK(kFromB == a->shape[1], "Matrix dimensions don't match for multiplication");
-  } else {
-    TVM_FFI_ICHECK(b->shape[1] == a->shape[1], "Matrix dimensions don't match for multiplication");
-  }
+  TVM_FFI_ICHECK_EQ(b->shape[1], a->shape[1]) << "Matrix dimensions don't match for multiplication";
   TVM_FFI_ICHECK(out->shape[0] == m && out->shape[1] == n) << "Output tensor has wrong dimensions";
 
   auto runner = flashinfer::TrtllmGenGemmRunner(flashinfer::TrtllmGenGemmRunnerOptions{
@@ -340,17 +296,15 @@ void trtllm_gemm(Tensor workspace_buffer, Tensor a, Tensor b, Optional<Tensor> a
   });
 
   if (tactic == -1) {
-    tactic = runner.selectHeuristic(m, n, k, is_ds_fp8);
+    tactic = runner.selectHeuristic(m, n, k);
   }
 
   auto stream = get_stream(a->device);
 
   auto runKernel = [&](void* workspace) {
-    auto* a_scale_ptr = a_scale.has_value() ? a_scale.value()->data : nullptr;
-    auto* b_scale_ptr = b_scale.has_value() ? b_scale.value()->data : nullptr;
-    auto* global_scale_ptr = globalScale.has_value() ? globalScale.value()->data : nullptr;
-    runner.run(m, n, k, a->data, a_scale_ptr, b->data, b_scale_ptr, out->data,
-               global_scale_ptr : nullptr, nullptr, workspace, stream, a->device.device_id, tactic);
+    runner.run(m, n, k, a->data, a_scale->data, b->data, b_scale->data, out->data,
+               globalScale.has_value() ? globalScale.value()->data : nullptr, nullptr, workspace,
+               stream, a->device.device_id, tactic);
   };
 
   int64_t const required_workspace_size = runner.getWorkspaceSizeInBytes(m, n, k, tactic);

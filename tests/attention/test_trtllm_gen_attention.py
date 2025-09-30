@@ -13,7 +13,7 @@ from tests.test_helpers.sink_attention_reference import sink_attention_unified
 
 import flashinfer
 from flashinfer.utils import FP4Tensor, ceil_div, round_up, get_compute_capability
-from tests.utils_fp8 import to_float8
+from .utils_fp8 import to_float8
 
 DTYPE_MAP = {
     "fp16": torch.float16,

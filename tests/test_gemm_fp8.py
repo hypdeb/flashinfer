@@ -4,10 +4,14 @@ import torch
 import torch.nn.functional as F
 
 from flashinfer import autotune, gemm_fp8
-from flashinfer.fused_moe.core import convert_to_block_layout, _maybe_get_cached_w2_permute_indices
-from tests.utils_fp8 import to_float8
+from flashinfer.fused_moe.core import (
+    convert_to_block_layout,
+    _maybe_get_cached_w2_permute_indices,
+)
+from utils_fp8 import to_float8
 
 _cache_permute_indices: Dict[torch.Size, torch.Tensor] = {}
+
 
 @pytest.mark.parametrize("m", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("n", [2560, 5120])
@@ -16,7 +20,9 @@ _cache_permute_indices: Dict[torch.Size, torch.Tensor] = {}
 @pytest.mark.parametrize("mat2_dtype", [torch.float8_e4m3fn])
 @pytest.mark.parametrize("res_dtype", [torch.bfloat16])
 @pytest.mark.parametrize("backend", ["trtllm", "auto"])
-@pytest.mark.parametrize("auto_tuning", [False]) # FIXME: auto-tuning not working for now.
+@pytest.mark.parametrize(
+    "auto_tuning", [False]
+)  # FIXME: auto-tuning not working for now.
 def test_gemm_fp8(
     m: int,
     n: int,
@@ -39,9 +45,7 @@ def test_gemm_fp8(
     global_scale = input_inv_s * mat2_inv_s
 
     permute_indices = _maybe_get_cached_w2_permute_indices(
-        _cache_permute_indices,
-        mat2_fp8,
-        128
+        _cache_permute_indices, mat2_fp8, 128
     )
     shuffled_weights = mat2_fp8[permute_indices.to(device=mat2_fp8.device)].contiguous()
     block_layout_weights = convert_to_block_layout(shuffled_weights, 128)

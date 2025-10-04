@@ -3695,21 +3695,24 @@ def generate_files(specs_names, output_dir: str):
         f.write(mk_code)
 
     print_kernel_traits_code = get_kernel_traits_code(valid_specs_names)
-    with open(os.path.join(output_dir, "print_kernel_traits.cu"), "w") as f:
+    print_kernel_traits_path = os.path.join(output_dir, "print_kernel_traits.cu")
+    with open(print_kernel_traits_path, "w") as f:
         f.write(print_kernel_traits_code)
 
     # Make sure we have a bin directory.
-    if not os.path.exists("bin"):
+    if not os.path.exists(os.path.join(output_dir, "bin")):
         os.mkdir("bin")
-    cmd = "nvcc -I src -Xcompiler -Wno-enum-compare --std=c++17 -o bin/print_traits.exe generated/print_kernel_traits.cu".split()
+
+    print_kernel_traits_exe_path = os.path.join(output_dir, "bin", "print_traits.exe")
+    cmd = f"nvcc -I src -Xcompiler -Wno-enum-compare --std=c++17 -o {print_kernel_traits_exe_path} {print_kernel_traits_path}".split()
     if "CUDA_PATH" in os.environ:
         cmd[0] = os.environ["CUDA_PATH"] + "/bin/" + cmd[0]
-    print('Running command "{}" to build "bin/print_traits.exe":'.format(" ".join(cmd)))
+    print(f'Running command "{print_kernel_traits_exe_path}":'.format(" ".join(cmd)))
     process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     output, error = process.communicate()
-    print('Running "bin/print_traits.exe":')
+    print(f'Running "{print_kernel_traits_exe_path}":')
     process = subprocess.Popen(
-        "bin/print_traits.exe", stdin=subprocess.PIPE, stdout=subprocess.PIPE
+        print_kernel_traits_exe_path, stdin=subprocess.PIPE, stdout=subprocess.PIPE
     )
     output, error = process.communicate()
     output = output.decode("utf-8").strip()

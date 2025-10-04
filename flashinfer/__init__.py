@@ -58,6 +58,7 @@ from .decode import (
 )
 from .decode import cudnn_batch_decode_with_kv_cache as cudnn_batch_decode_with_kv_cache
 from .decode import single_decode_with_kv_cache as single_decode_with_kv_cache
+from .fmha_v2 import fmha_v2 as fmha_v2
 from .fp4_quantization import (
     SfLayout,
     block_scale_interleave,

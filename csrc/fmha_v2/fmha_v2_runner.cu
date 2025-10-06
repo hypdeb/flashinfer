@@ -1,6 +1,7 @@
 #include "fused_multihead_attention_api.h"
 
-namespace flashinfer {
+namespace flashinfer
+{
 
 void fmha_v2() {}
 

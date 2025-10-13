@@ -46,12 +46,6 @@ def bench_mm_fp4(m: int, n: int, k: int, fp4_type: str, res_dtype: torch.dtype, 
     if not use_128x4_sf_layout and backend != "trtllm":
         print("Skipping test for non-trtllm fp4 with use_128x4_sf_layout=False")
         return
-    if backend == "cudnn":
-        print("Skipping test for cudnn fp4 with auto_tuning=True")
-        return
-    if not use_nvfp4 and backend != "cudnn":
-        print("mx_fp4 is only supported for cudnn backend")
-        return
 
     if fp4_type == "nvfp4":
         use_nvfp4 = True

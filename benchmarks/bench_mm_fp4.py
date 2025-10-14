@@ -47,6 +47,10 @@ def bench_mm_fp4(m: int, n: int, k: int, fp4_type: str, res_dtype: torch.dtype, 
         print("Skipping test for non-trtllm fp4 with use_128x4_sf_layout=False")
         return
 
+    if backend != "cudnn" and fp4_type in ["mxfp4_alpha", "mxfp4"]:
+        print("Skipping bench: only cudnn FP4 GEMM supports mxfp4 quantization.")
+        return
+
     if fp4_type == "nvfp4":
         use_nvfp4 = True
     else:
@@ -54,6 +58,7 @@ def bench_mm_fp4(m: int, n: int, k: int, fp4_type: str, res_dtype: torch.dtype, 
 
     mat2 = torch.randn([n, k], device="cuda", dtype=torch.bfloat16)
     a_sf_layout = SfLayout.layout_128x4 if use_128x4_sf_layout else SfLayout.layout_8x4
+    input = torch.randn([m, k], device="cuda", dtype=torch.bfloat16)
     global_sf_input = (448 * 6) / input.float().abs().nan_to_num().max()
     global_sf_mat2 = (448 * 6) / mat2.float().abs().nan_to_num().max()
     do_shuffle_b = backend == "trtllm"
@@ -111,7 +116,7 @@ def bench_mm_fp4(m: int, n: int, k: int, fp4_type: str, res_dtype: torch.dtype, 
         use_cuda_graph=True,
     )
     ms = np.median(measurements)
-    tflops_per_second = 2 * m * n * k * 1e-9 / ms
+    tflops_per_second = 2 * (m // 2) * (n // 2) * (k // 2) * 1e-9 / ms
 
     bandwidth = (
         (

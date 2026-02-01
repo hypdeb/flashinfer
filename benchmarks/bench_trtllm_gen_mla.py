@@ -1,3 +1,6 @@
+import csv
+from typing import Any
+
 import numpy as np
 import torch
 
@@ -10,7 +13,7 @@ qk_rope_head_dim = 64
 kv_lora_rank = 512
 
 
-def bench_trtllm_mla(batch_size, q_len_per_request, seq_len, page_size, dtype):
+def bench_trtllm_mla(batch_size, q_len_per_request, seq_len, page_size, dtype) -> dict[str, Any]:
     torch.manual_seed(42)
     device = "cuda:0"
 
@@ -134,11 +137,23 @@ def bench_trtllm_mla(batch_size, q_len_per_request, seq_len, page_size, dtype):
 
 
 if __name__ == "__main__":
-    for dtype in [torch.bfloat16, torch.float8_e4m3fn]:
-        for page_size in [32, 64]:
-            for batch_size in [1, 2, 4, 16, 32, 64, 128, 256, 512, 768, 1024]:
-                for seq_len in [1024, 4096, 8192]:
-                    for q_len_per_request in [1, 2, 4, 8, 16]:
-                        bench_trtllm_mla(
+    results = []
+    for dtype in [torch.float8_e4m3fn]:
+        for page_size in [64]:
+            for batch_size in [256, 512, 768, 1024]:
+                for seq_len in [4096, 8192]:
+                    for q_len_per_request in [1, 2, 3, 4]:
+                        result = bench_trtllm_mla(
                             batch_size, q_len_per_request, seq_len, page_size, dtype
                         )
+                        results.append(result)
+
+    # Write results to CSV
+    csv_filename = "bench_trtllm_gen_mla_results.csv"
+    if results:
+        with open(csv_filename, "w", newline="") as csvfile:
+            fieldnames = results[0].keys()
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(results)
+        print(f"\nResults written to {csv_filename}")

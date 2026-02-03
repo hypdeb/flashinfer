@@ -1,0 +1,13 @@
+--routine trtllm_fp4_block_scale_moe --num_tokens 1 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 2 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 4 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 8 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 16 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 32 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 64 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 128 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 256 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 512 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 1024 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 2048 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv
+--routine trtllm_fp4_block_scale_moe --num_tokens 4096 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight -vv

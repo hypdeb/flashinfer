@@ -94,3 +94,7 @@ bench-all:
 
 bench-old:
 	python benchmarks/bench_trtllm_gen_mla.py
+
+profile-and-stats:
+	nsys profile -o report.nsys-rep -f true python benchmarks/flashinfer_benchmark.py --routine trtllm_fp4_block_scale_moe --num_tokens 1024 --hidden_size --intermediate_size 7168 --num_experts 128 --top_k 4 --routing_method renormalize --use_shuffled_weight --num_iters 1000 -vv --use_cuda_events
+	nsys stats --report cuda_gpu_kern_sum --format column:colmax=0 report.nsys-rep | grep bmm

@@ -275,6 +275,7 @@ def create_trtllm_moe_test_data(
     # Create routing logits - dtype depends on both routing method AND MOE kernel type
     # Different MOE kernels have different routing_logits dtype requirements:
 
+    print(f"[DEBUG] Creating routing logits for {moe_kernel_type} with routing method type {routing_method_type}")
     if moe_kernel_type == "fp8_block_scale":
         # DeepSeekV3 routing uses float32, others use bfloat16
         routing_dtype = torch.float32 if routing_method_type == 2 else torch.bfloat16

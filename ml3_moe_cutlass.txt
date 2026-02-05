@@ -1,0 +1,34 @@
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 1 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 2 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 4 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 8 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 16 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 32 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 64 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 128 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 256 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 512 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 1024 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 2048 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 4096 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 8192 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 16384 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+--routine cutlass_fused_moe --cutlass_variant fp8 --num_tokens 32768 --hidden_size 7168 --intermediate_size 4096 --num_experts 128 --top_k 4 --routed_scaling_factor 2.5 -vv
+
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 1 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 2 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 4 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 8 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 16 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 32 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 64 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 128 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 256 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 512 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 1024 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 2048 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 4096 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 8192 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 8192 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 16384 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv
+--routine cutlass_fused_moe --cutlass_variant nvfp4 --num_tokens 32768 --hidden_size 4096 --intermediate_size 7168 --num_experts 128 --top_k 4 -vv

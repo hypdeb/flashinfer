@@ -85,12 +85,15 @@ bench-fp8-moe:
 	--use_shuffled_weight \
 	-vv
 
-
-bench-all:
+bench-moe-list:
 	python benchmarks/flashinfer_benchmark.py \
-	--testlist ml3_bench.txt \
-	--output_path ml3_out.csv
+	--testlist ml3_moe_bench.txt \
+	--output_path ml3_moe_out.csv
 
+bench-cutlass-moe-list:
+	python benchmarks/flashinfer_benchmark.py \
+	--testlist ml3_moe_cutlass.txt \
+	--output_path ml3_moe_cutlass_out.csv
 
 bench-old:
 	python benchmarks/bench_trtllm_gen_mla.py
